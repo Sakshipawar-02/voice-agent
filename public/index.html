@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+
+    <meta charset="UTF-8">
+
+    <meta
+        name="viewport"
+        content="width=device-width, initial-scale=1.0"
+    >
+
+    <title>
+        Gemini Voice Agent Dashboard
+    </title>
+
+    <link
+        rel="stylesheet"
+        href="style.css"
+    >
+
+</head>
+
+<body>
+
+    <div class="header">
+
+        <h1>
+            AI Voice Agent Dashboard
+        </h1>
+
+    </div>
+
+
+    <div class="main-layout">
+
+
+        <!-- VOICE SECTION -->
+
+        <section class="card voice-section">
+
+            <h2>
+                Voice Interaction
+            </h2>
+
+
+            <div class="mic-container">
+
+                <h3>
+                    User Input Controls
+                </h3>
+
+                <div class="button-group">
+
+                    <button
+                        id="startMicBtn"
+                        class="mic-btn"
+                    >
+                        🎤 Start Listening
+                    </button>
+
+                </div>
+
+            </div>
+
+
+            <div
+                class="mic-container"
+                style="margin-top: 1rem;"
+            >
+
+                <h3>
+                    Agent Voice Controls
+                </h3>
+
+                <div class="button-group">
+
+                    <button
+                        id="stopAgentBtn"
+                        class="clear-btn"
+                        style="
+                            background-color:#cf2c21;
+                            color:wheat;
+                        "
+                    >
+                        🔇 Stop Agent Voice
+                    </button>
+
+                </div>
+
+                <span
+                    id="statusIndicator"
+                    class="status"
+                >
+                </span>
+
+            </div>
+
+
+            <div class="dialogue-box">
+
+                <div class="dialogue-item">
+
+                    <strong>
+                        You Said:
+                    </strong>
+
+                    <p id="userQuery">
+                        Press "Start Listening"
+                        and ask a question...
+                    </p>
+
+                </div>
+
+
+                <div class="dialogue-item">
+
+                    <strong>
+                        Agent Response:
+                    </strong>
+
+                    <p id="agentAnswer">
+                        Awaiting input...
+                    </p>
+
+                </div>
+
+            </div>
+
+        </section>
+
+
+
+        <!-- DASHBOARD -->
+
+        <section class="card dashboard-section">
+
+            <div class="dashboard-header">
+
+                <h2>
+                    Saved Logs
+                </h2>
+
+                <button
+                    id="clearBtn"
+                    class="clear-btn"
+                >
+                    Clear Logs
+                </button>
+
+            </div>
+
+
+            <div class="table-wrapper">
+
+                <table>
+
+                    <thead>
+
+                        <tr>
+
+                            <th>
+                                ID
+                            </th>
+
+                            <th>
+                                Timestamp
+                            </th>
+
+                            <th>
+                                User Prompt
+                            </th>
+
+                            <th>
+                                Agent Response
+                            </th>
+
+                        </tr>
+
+                    </thead>
+
+
+                    <tbody
+                        id="dashboardTable"
+                    >
+                    </tbody>
+
+                </table>
+
+            </div>
+
+        </section>
+
+
+    </div>
+
+
+    <script src="app.js"></script>
+
+</body>
+
+</html>

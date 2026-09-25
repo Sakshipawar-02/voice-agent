@@ -3,16 +3,18 @@ const express = require("express");
 const http = require("http");
 const WebSocket = require("ws");
 const path = require("path");
+const Groq = require("groq-sdk");
 const db = require("./database");
 
 const app = express();
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
 
-const PORT = 3000;
-const OLLAMA_URL = "http://localhost:11434/api/chat";
-const MODEL = "llama3.2:3b";
-const ASSISTANT_NAME = "आर्या";
+const PORT = process.env.PORT || 3000;
+const ASSISTANT_NAME = "Siri";
+
+// Initialize Groq client with API Key from .env
+const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
 app.use(express.static(path.join(__dirname, "public")));
 
@@ -86,9 +88,9 @@ wss.on("connection", ws => {
       ) {
         let nameResponse = `माझे नाव ${ASSISTANT_NAME} आहे. सांग, मी तुला कशी मदत करू?`;
         
-        if (lang === "hi") nameResponse = `मेरा नाम ${ASSISTANT_NAME} है। बताइए, मैं आपकी क्या मदद कर सकता हूँ?`;
-        else if (lang === "hi-roman") nameResponse = `Mera naam Aarya hai. Batao, main aapki kya madad karoon?`;
-        else if (lang === "en") nameResponse = `My name is Aarya. How can I help you today?`;
+        if (lang === "hi") nameResponse = `मेरा नाम ${ASSISTANT_NAME} है। बताइए, मैं आपकी क्या मदद कर सकती हूँ?`;
+        else if (lang === "hi-roman") nameResponse = `Mera naam ${ASSISTANT_NAME} hai. Batao, main aapki kya madad karoon?`;
+        else if (lang === "en") nameResponse = `My name is ${ASSISTANT_NAME}. How can I help you today?`;
 
         db.run("INSERT INTO interactions (user_prompt, agent_response) VALUES (?, ?)", [text, nameResponse]);
         ws.send(JSON.stringify({ type: "AGENT_RESPONSE", text: nameResponse, language: lang }));
@@ -96,9 +98,8 @@ wss.on("connection", ws => {
       }
 
       // 2. Direct Intercept for Pure Language Switch Triggers ONLY
-      // Using strict start/end ^...$ so full queries like "marathi madhe 5 mulanchi naave sang" pass through to Ollama
       if (/^(marathi|marathi madhe bol|marathit bol|marathi bol|मराठी|मराठीत बोल)$/i.test(cleanText)) {
-        const marathiResponse = "हो, नक्की! मी मराठीत बोलू शकतो. सांग, मी तुला कशी मदत करू?";
+        const marathiResponse = "हो, नक्की! मी मराठीत बोलू शकते. सांग, मी तुला कशी मदत करू?";
         db.run("INSERT INTO interactions (user_prompt, agent_response) VALUES (?, ?)", [text, marathiResponse]);
         ws.send(JSON.stringify({ type: "AGENT_RESPONSE", text: marathiResponse, language: "mr" }));
         return;
@@ -106,9 +107,9 @@ wss.on("connection", ws => {
 
       // 3. Direct Intercept for Greetings
       if (/^(hello|hi|hey|namaste|namaskar|नमस्कार)$/i.test(cleanText)) {
-        let greetingResponse = "नमस्कार! मी तुला कशी मदत करू शकतो?";
-        if (lang === "hi") greetingResponse = "नमस्ते! मैं आपकी क्या मदद कर सकता हूँ?";
-        else if (lang === "hi-roman") greetingResponse = "Namaste! Main aapki kya madad kar sakta hoon?";
+        let greetingResponse = "नमस्कार! मी तुला कशी मदत करू शकते?";
+        if (lang === "hi") greetingResponse = "नमस्ते! मैं आपकी क्या मदद कर सकती हूँ?";
+        else if (lang === "hi-roman") greetingResponse = "Namaste! Main aapki kya madad kar sakti hoon?";
         else if (lang === "en") greetingResponse = "Namaste! How can I help you today?";
 
         db.run("INSERT INTO interactions (user_prompt, agent_response) VALUES (?, ?)", [text, greetingResponse]);
@@ -116,33 +117,27 @@ wss.on("connection", ws => {
         return;
       }
 
-      // 4. Fallback to Ollama (Handles actual requests like asking for names)
+      // 4. Groq API Call replacing local Ollama
       const rule = LANG_RULES[lang] || LANG_RULES.en;
 
-      const response = await fetch(OLLAMA_URL, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model: MODEL,
-          stream: false,
-          messages: [
-            {
-              role: "system",
-              content: `Your name is ${ASSISTANT_NAME}.
+      const completion = await groq.chat.completions.create({
+        messages: [
+          {
+            role: "system",
+            content: `Your name is ${ASSISTANT_NAME}.
 Target Language: ${rule.name}.
 Rule: ${rule.script}
-Keep answers under 1-2 short direct sentences. Do not add filler greetings like "Namaste! I am Aarya".`
-            },
-            { role: "user", content: text }
-          ]
-        })
+Keep answers under 1-2 short direct sentences. Do not add filler greetings like "Namaste! I am ${ASSISTANT_NAME}".`
+          },
+          { role: "user", content: text }
+        ],
+        model: "llama-3.3-70b-versatile",
+        temperature: 0.7,
+        max_tokens: 300,
       });
 
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || "Ollama error");
-
-      const answer = data?.message?.content?.trim();
-      if (!answer) throw new Error("Empty AI response");
+      const answer = completion.choices[0]?.message?.content?.trim();
+      if (!answer) throw new Error("Empty AI response from Groq");
 
       db.run("INSERT INTO interactions (user_prompt, agent_response) VALUES (?, ?)", [text, answer]);
       ws.send(JSON.stringify({ type: "AGENT_RESPONSE", text: answer, language: lang }));

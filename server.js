@@ -1,14 +1,20 @@
-require("dotenv").config();
-const express = require("express");
-const http = require("http");
-const WebSocket = require("ws");
-const path = require("path");
-const Groq = require("groq-sdk");
-const db = require("./database");
+import dotenv from "dotenv";
+dotenv.config();
+
+import express from "express";
+import http from "http";
+import { WebSocketServer } from "ws";
+import path from "path";
+import { fileURLToPath } from "url";
+import Groq from "groq-sdk";
+import db from "./database.js";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const app = express();
 const server = http.createServer(app);
-const wss = new WebSocket.Server({ server });
+const wss = new WebSocketServer({ server });
 
 const PORT = process.env.PORT || 3000;
 const ASSISTANT_NAME = "Siri";

@@ -112,25 +112,26 @@ wss.on("connection", ws => {
       }
 
       // 3. Direct Intercept for Greetings
-      if (/^(hello|hi|hey|namaste|namaskar|नमस्कार)$/i.test(cleanText)) {
+      if (/^(hello|hi|hey|namaste|namaskar|नमस्कार|good morning|good afternoon|good evening)$/i.test(cleanText)) {
         let greetingResponse = "नमस्कार! मी तुला कशी मदत करू शकते?";
         if (lang === "hi") greetingResponse = "नमस्ते! मैं आपकी क्या मदद कर सकती हूँ?";
         else if (lang === "hi-roman") greetingResponse = "Namaste! Main aapki kya madad kar sakti hoon?";
-        else if (lang === "en") greetingResponse = "Namaste! How can I help you today?";
+        else if (lang === "en") greetingResponse = "Hello! How can I help you today?";
 
         db.run("INSERT INTO interactions (user_prompt, agent_response) VALUES (?, ?)", [text, greetingResponse]);
         ws.send(JSON.stringify({ type: "AGENT_RESPONSE", text: greetingResponse, language: lang }));
         return;
       }
 
-      // 4. Groq API Call with Model Fallback
+      // 4. Groq API Call with Valid Model Fallback and Female Grammar Rules
       const rule = LANG_RULES[lang] || LANG_RULES.en;
       const messagesPayload = [
         {
           role: "system",
-          content: `Your name is ${ASSISTANT_NAME}.
+          content: `Your name is ${ASSISTANT_NAME}. You are a female AI assistant.
 Target Language: ${rule.name}.
 Rule: ${rule.script}
+Grammar Rule: ALWAYS use female self-referencing verbs and pronouns (e.g., in Marathi use 'मी करू शकते', 'मी सांगेन', 'माझे नाव आर्या आहे').
 Keep answers under 1-2 short direct sentences. Do not add filler greetings like "Namaste! I am ${ASSISTANT_NAME}".`
         },
         { role: "user", content: text }
@@ -145,10 +146,10 @@ Keep answers under 1-2 short direct sentences. Do not add filler greetings like 
           max_tokens: 300,
         });
       } catch (modelErr) {
-        console.warn("Primary model llama-3.1-8b-instant failed, trying fallback llama-3.3-70b-versatile:", modelErr.message);
+        console.warn("Primary model llama-3.1-8b-instant failed, trying fallback llama3-70b-8192:", modelErr.message);
         completion = await groq.chat.completions.create({
           messages: messagesPayload,
-          model: "llama-3.3-70b-versatile",
+          model: "llama3-70b-8192",
           temperature: 0.7,
           max_tokens: 300,
         });

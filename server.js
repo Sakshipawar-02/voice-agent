@@ -46,7 +46,6 @@ const LANG_RULES = {
 function detectLanguage(text) {
   const t = text.toLowerCase().trim();
   
-  // Detect Marathi keywords (Devanagari or Romanized) -> Route to 'mr' (Devanagari)
   if (
     /[\u0900-\u097f]/.test(t) && /\b(काय|कसा|कशी|कसे|तू|तुम्ही|मी|मला|तुला|आहे|करत|कुठे|नाही|बोल|नाव)\b/.test(t) ||
     /\b(kay|kaay|karat|kart|aahe|ahe|mala|tula|kasa|kashi|kuthe|nahi|bol|sang|marathi|nav|naav|naave|mulinchi|mulanchi|song|sanga|tujhe|majha)\b/i.test(t)
@@ -123,7 +122,7 @@ wss.on("connection", ws => {
         return;
       }
 
-      // 4. Groq API Call with Valid Model Fallback and Female Grammar Rules
+      // 4. Groq API Call with Valid Model Fallback and Strict Female Grammar System Prompt
       const rule = LANG_RULES[lang] || LANG_RULES.en;
       const messagesPayload = [
         {
@@ -146,7 +145,7 @@ Keep answers under 1-2 short direct sentences. Do not add filler greetings like 
           max_tokens: 300,
         });
       } catch (modelErr) {
-        console.warn("Primary model llama-3.1-8b-instant failed, trying fallback llama3-70b-8192:", modelErr.message);
+        console.warn("Primary model failed, trying fallback model llama3-70b-8192:", modelErr.message);
         completion = await groq.chat.completions.create({
           messages: messagesPayload,
           model: "llama3-70b-8192",

@@ -7,38 +7,40 @@ const [start, stop, status, user, answer, table, clear] =
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
 
 if (!SR) {
-  status.innerText = "Use Chrome";
-  start.disabled = true;
+  if (status) status.innerText = "Use Chrome or Edge";
+  if (start) start.disabled = true;
 } else {
   const recognition = new SR();
   recognition.continuous = false;
   recognition.interimResults = false;
   recognition.lang = "en-IN";
 
-  start.onclick = () => {
-    speechSynthesis.cancel();
-    try { recognition.start(); } catch {}
-  };
+  if (start) {
+    start.onclick = () => {
+      speechSynthesis.cancel();
+      try { recognition.start(); } catch {}
+    };
+  }
 
   recognition.onstart = () => {
-    status.innerText = "🎤 Listening...";
-    start.innerText = "🎤 Listening...";
+    if (status) status.innerText = "🎤 Listening...";
+    if (start) start.innerText = "🎤 Listening...";
   };
 
   recognition.onend = () => {
-    start.innerText = "🎤 Start Listening";
+    if (start) start.innerText = "🎤 Start Listening";
   };
 
   recognition.onerror = e => {
-    status.innerText = "Mic Error: " + e.error;
-    start.innerText = "🎤 Start Listening";
+    if (status) status.innerText = "Mic Error: " + e.error;
+    if (start) start.innerText = "🎤 Start Listening";
   };
 
   recognition.onresult = e => {
     const text = e.results[0][0].transcript.trim();
-    user.innerText = text;
-    answer.innerText = "Thinking...";
-    status.innerText = "Processing...";
+    if (user) user.innerText = text;
+    if (answer) answer.innerText = "Thinking...";
+    if (status) status.innerText = "Processing...";
 
     if (ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({ type: "USER_PROMPT", text }));
@@ -46,24 +48,26 @@ if (!SR) {
   };
 }
 
-ws.onopen = () => status.innerText = "Ready";
+ws.onopen = () => {
+  if (status) status.innerText = "Ready";
+};
 
 ws.onmessage = e => {
   const data = JSON.parse(e.data);
 
   if (data.type === "AGENT_RESPONSE") {
-    answer.innerText = data.text;
+    if (answer) answer.innerText = data.text;
     speak(data.text, data.language);
     fetchHistory();
   }
 
   if (data.type === "ERROR") {
-    answer.innerText = "Error: " + data.message;
-    status.innerText = "Error";
+    if (answer) answer.innerText = "Error: " + data.message;
+    if (status) status.innerText = "Error";
   }
 };
 
-// === TEXT TO SPEECH (TTS) LOGIC ===
+// === TEXT TO SPEECH (TTS) LOGIC (FORCE FEMALE MARATHI/HINDI VOICE) ===
 function speak(text, language) {
   speechSynthesis.cancel();
 
@@ -73,20 +77,30 @@ function speak(text, language) {
     const voices = speechSynthesis.getVoices();
     let voice = null;
 
+    // Filter female voices explicitly and exclude male voices (Ravi, David, Male, etc.)
+    const isFemaleVoice = (v) => {
+      const name = v.name.toLowerCase();
+      return (
+        name.includes("female") ||
+        name.includes("swara") ||
+        name.includes("kalpana") ||
+        name.includes("heera") ||
+        name.includes("neerja") ||
+        name.includes("sangeeta") ||
+        name.includes("zira") ||
+        name.includes("google") ||
+        name.includes("natural")
+      ) && !name.includes("david") && !name.includes("ravi") && !name.includes("male");
+    };
+
     if (isDevanagari) {
-      voice = voices.find(v => v.lang.toLowerCase().includes("hi-in") || 
-                               v.lang.toLowerCase().includes("mr-in") || 
-                               v.name.toLowerCase().includes("hindi") ||
-                               v.name.toLowerCase().includes("marathi"));
+      voice =
+        voices.find(v => (v.lang.includes("mr") || v.lang.includes("hi")) && isFemaleVoice(v)) ||
+        voices.find(v => v.lang.includes("mr-IN") || v.lang.includes("hi-IN"));
     } else {
-      voice = voices.find(v => v.name.includes("Google") && (v.lang === "en-IN" || v.lang === "hi-IN")) ||
-              voices.find(v => v.lang.toLowerCase() === "en-in") ||
-              voices.find(v => v.lang.toLowerCase() === "hi-in") ||
-              voices.find(v => v.name.toLowerCase().includes("india")) ||
-              voices.find(v => v.name.toLowerCase().includes("heera")) ||
-              voices.find(v => v.name.toLowerCase().includes("neerja")) ||
-              voices.find(v => v.name.toLowerCase().includes("ravi")) ||
-              voices.find(v => v.name.toLowerCase().includes("sangeeta"));
+      voice =
+        voices.find(v => v.lang.includes("en-IN") && isFemaleVoice(v)) ||
+        voices.find(v => isFemaleVoice(v));
     }
 
     const utterance = new SpeechSynthesisUtterance(text);
@@ -94,16 +108,16 @@ function speak(text, language) {
     if (voice) {
       utterance.voice = voice;
       utterance.lang = voice.lang;
-      utterance.rate = 0.92;
-      utterance.pitch = 1.0;
     } else {
-      utterance.lang = "en-IN";
-      utterance.rate = 0.88;
-      utterance.pitch = 0.95;
+      utterance.lang = isDevanagari ? "hi-IN" : "en-IN";
     }
 
-    utterance.onstart = () => status.innerText = "🔊 Speaking...";
-    utterance.onend = () => status.innerText = "Ready";
+    // Force higher pitch (1.35) and slightly slower speech rate (0.88) to guarantee female tone
+    utterance.rate = 0.88;
+    utterance.pitch = 1.35;
+
+    utterance.onstart = () => { if (status) status.innerText = "🔊 Speaking..."; };
+    utterance.onend = () => { if (status) status.innerText = "Ready"; };
 
     speechSynthesis.speak(utterance);
   };
@@ -115,34 +129,40 @@ function speak(text, language) {
   }
 }
 
-stop.onclick = () => {
-  speechSynthesis.cancel();
-  status.innerText = "Voice stopped";
-};
+if (stop) {
+  stop.onclick = () => {
+    speechSynthesis.cancel();
+    if (status) status.innerText = "Voice stopped";
+  };
+}
 
 async function fetchHistory() {
   try {
     const res = await fetch("/api/history");
     const rows = await res.json();
 
-    table.innerHTML = rows.map(r => `
-      <tr>
-        <td>#${r.id}</td>
-        <td>${new Date(r.created_at).toLocaleString()}</td>
-        <td>${r.user_prompt}</td>
-        <td>${r.agent_response}</td>
-      </tr>
-    `).join("");
+    if (table) {
+      table.innerHTML = rows.map(r => `
+        <tr>
+          <td>#${r.id}</td>
+          <td>${new Date(r.created_at).toLocaleString()}</td>
+          <td>${r.user_prompt}</td>
+          <td>${r.agent_response}</td>
+        </tr>
+      `).join("");
+    }
   } catch (err) {
     console.error("Failed to load history:", err);
   }
 }
 
-clear.onclick = async () => {
-  if (!confirm("Clear history?")) return;
+if (clear) {
+  clear.onclick = async () => {
+    if (!confirm("Clear history?")) return;
 
-  await fetch("/api/history", { method: "DELETE" });
-  fetchHistory();
-};
+    await fetch("/api/history", { method: "DELETE" });
+    fetchHistory();
+  };
+}
 
 fetchHistory();

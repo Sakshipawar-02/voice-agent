@@ -1,84 +1,36 @@
-const startBtn = document.getElementById('startBtn');
-const sendBtn = document.getElementById('sendBtn');
-const stopBtn = document.getElementById('stopBtn');
+const toggleAgentBtn = document.getElementById('toggleAgentBtn');
 const statusBadge = document.getElementById('statusBadge');
 const transcriptBox = document.getElementById('transcriptBox');
-const historyList = document.getElementById('historyList');
-const historyCount = document.getElementById('historyCount');
-const refreshHistoryBtn = document.getElementById('refreshHistoryBtn');
 
+const silenceAfterSpeechMs = 1200;
+const minimumSpeechMs = 450;
+const speechRmsThreshold = 0.015;
+
+let sessionActive = false;
+let starting = false;
+let sessionId = 0;
 let mediaStream = null;
+let audioContext = null;
+let analyser = null;
+let analyserSamples = null;
+let sourceNode = null;
 let recorder = null;
 let audioChunks = [];
-let history = [];
+let voiceStartedAt = 0;
+let lastVoiceAt = 0;
+let vadFrame = 0;
 let requestInProgress = false;
 let assistantSpeaking = false;
 let replyAudio = null;
+let history = [];
+let voiceNotice = '';
 
 function setStatus(text, state = 'normal') {
   statusBadge.textContent = text;
-  statusBadge.className = 'status-badge';
+  statusBadge.className = '';
   if (state === 'active') statusBadge.classList.add('active');
   if (state === 'error') statusBadge.classList.add('error');
 }
-
-function appendLog(label, text) {
-  const line = document.createElement('div');
-  line.style.marginBottom = '0.75rem';
-  const heading = document.createElement('strong');
-  heading.textContent = `${label}: `;
-  line.append(heading, document.createTextNode(text));
-  transcriptBox.appendChild(line);
-  transcriptBox.scrollTop = transcriptBox.scrollHeight;
-}
-
-function appendHistoryText(parent, label, value) {
-  const line = document.createElement('p');
-  const heading = document.createElement('strong');
-  heading.textContent = `${label}: `;
-  line.append(heading, document.createTextNode(value || ''));
-  parent.appendChild(line);
-}
-
-async function loadHistory() {
-  historyCount.textContent = 'Loading conversations…';
-  refreshHistoryBtn.disabled = true;
-  try {
-    const response = await fetch('/api/history');
-    const result = await response.json();
-    if (!response.ok || !result.success) throw new Error(result.error || 'Could not load conversations.');
-    const logs = result.logs || [];
-    historyCount.textContent = `${logs.length} saved conversation${logs.length === 1 ? '' : 's'}`;
-    historyList.replaceChildren();
-    if (!logs.length) {
-      const empty = document.createElement('p');
-      empty.className = 'muted';
-      empty.textContent = 'No conversations yet. Your saved chats will show up here.';
-      historyList.appendChild(empty);
-      return;
-    }
-    for (const log of logs) {
-      const item = document.createElement('article');
-      item.className = 'history-item';
-      const time = document.createElement('p');
-      time.className = 'history-time';
-      const parsedDate = new Date(`${log.timestamp || ''}Z`);
-      time.textContent = Number.isNaN(parsedDate.getTime()) ? '' : parsedDate.toLocaleString();
-      item.appendChild(time);
-      appendHistoryText(item, 'You', log.user_prompt);
-      appendHistoryText(item, 'AI', log.agent_response);
-      historyList.appendChild(item);
-    }
-  } catch (error) {
-    historyCount.textContent = error.message;
-    historyList.replaceChildren();
-  } finally {
-    refreshHistoryBtn.disabled = false;
-  }
-}
-
-refreshHistoryBtn.addEventListener('click', loadHistory);
-loadHistory();
 
 function supportedAudioType() {
   if (!window.MediaRecorder) return '';
@@ -86,179 +38,236 @@ function supportedAudioType() {
     .find((type) => MediaRecorder.isTypeSupported(type)) || '';
 }
 
-function finishSpeaking() {
+function addTurn(input, output) {
+  const turn = document.createElement('article');
+  turn.className = 'turn';
+  for (const [label, text] of [['Input', input], ['Output', output]]) {
+    const line = document.createElement('p');
+    const heading = document.createElement('span');
+    heading.className = 'label';
+    heading.textContent = label;
+    line.append(heading, document.createTextNode(text));
+    turn.appendChild(line);
+  }
+  transcriptBox.appendChild(turn);
+  transcriptBox.scrollTop = transcriptBox.scrollHeight;
+}
+
+function setDeviceVoice(utterance, languageTag) {
+  utterance.lang = languageTag || 'en-IN';
+  const requested = utterance.lang.toLowerCase();
+  const base = requested.split('-')[0];
+  const voices = window.speechSynthesis.getVoices();
+  const exactVoice = voices.find((voice) => voice.lang.toLowerCase() === requested);
+  if (exactVoice) {
+    utterance.voice = exactVoice;
+    return true;
+  }
+  if (['en-in', 'mr-in'].includes(requested)) return false;
+  utterance.voice = voices.find((voice) => voice.lang.toLowerCase().split('-')[0] === base) || null;
+  return true;
+}
+
+function resumeListeningAfterReply() {
   assistantSpeaking = false;
   replyAudio = null;
-  if (mediaStream?.active && !requestInProgress) beginRecording();
+  if (sessionActive && !requestInProgress) beginRecording();
 }
 
 function speakWithDeviceVoice(text, languageTag) {
   if (!('speechSynthesis' in window)) return false;
   const utterance = new SpeechSynthesisUtterance(text);
-  utterance.lang = languageTag || 'en';
-  const requestedLanguage = utterance.lang.toLowerCase();
-  const baseLanguage = requestedLanguage.split('-')[0];
-  const voices = window.speechSynthesis.getVoices();
-  const voice = voices.find((item) => item.lang.toLowerCase() === requestedLanguage)
-    || voices.find((item) => item.lang.toLowerCase().split('-')[0] === baseLanguage);
-  if (voice) utterance.voice = voice;
-  else appendLog('Voice', `No ${languageTag} voice is installed in this browser/device; speech will use its default voice. Install a matching system voice for better pronunciation.`);
-
+  if (!setDeviceVoice(utterance, languageTag)) return false;
   assistantSpeaking = true;
-  setStatus('Speaking response…', 'active');
-  utterance.onend = utterance.onerror = finishSpeaking;
+  setStatus('Speaking…', 'active');
+  utterance.onend = utterance.onerror = resumeListeningAfterReply;
   window.speechSynthesis.cancel();
   window.speechSynthesis.speak(utterance);
   return true;
 }
 
-function speakReply(result) {
+function speakReply(result, currentSession) {
   if (result.audioBase64 && typeof Audio !== 'undefined') {
-    replyAudio = new Audio(`data:audio/wav;base64,${result.audioBase64}`);
+    const player = new Audio(`data:audio/wav;base64,${result.audioBase64}`);
+    replyAudio = player;
     assistantSpeaking = true;
-    setStatus('Speaking in Indian voice…', 'active');
-    replyAudio.onended = finishSpeaking;
-    replyAudio.onerror = () => {
-      appendLog('Voice', 'Indian voice playback failed; using a voice installed on this device.');
-      assistantSpeaking = false;
+    setStatus('Speaking…', 'active');
+    player.onended = resumeListeningAfterReply;
+    player.onerror = () => {
+      if (!sessionActive || currentSession !== sessionId) return;
       replyAudio = null;
-      if (!speakWithDeviceVoice(result.reply, result.language)) finishSpeaking();
+      assistantSpeaking = false;
+      if (!speakWithDeviceVoice(result.reply, result.language)) resumeListeningAfterReply();
     };
-    replyAudio.play().catch(() => replyAudio?.onerror?.());
+    player.play().catch(() => player.onerror?.());
     return true;
   }
   return speakWithDeviceVoice(result.reply, result.language);
 }
 
 function beginRecording() {
-  if (!mediaStream || requestInProgress) return;
+  if (!sessionActive || requestInProgress || assistantSpeaking || !mediaStream) return;
   const mimeType = supportedAudioType();
   if (!mimeType) {
-    setStatus('Recording unsupported', 'error');
-    appendLog('Error', 'This browser cannot record audio in a format supported by the voice service. Try current Chrome or Edge.');
+    setStatus('This browser cannot record audio.', 'error');
     return;
   }
 
   audioChunks = [];
+  voiceStartedAt = 0;
+  lastVoiceAt = 0;
   recorder = new MediaRecorder(mediaStream, { mimeType });
   recorder.addEventListener('dataavailable', (event) => {
     if (event.data.size) audioChunks.push(event.data);
   });
-  recorder.start();
-  setStatus('Listening…', 'active');
-  sendBtn.disabled = false;
+  recorder.start(250);
+  setStatus(voiceNotice || 'Listening…', voiceNotice ? 'error' : 'active');
 }
 
-startBtn.addEventListener('click', async () => {
-  startBtn.disabled = true;
-  setStatus('Requesting microphone…');
-  transcriptBox.replaceChildren();
-  history = [];
+function monitorMicrophone() {
+  if (!sessionActive || !analyser) return;
+  const samples = analyserSamples;
+  analyser.getFloatTimeDomainData(samples);
+  let energy = 0;
+  for (const sample of samples) energy += sample * sample;
+  const rms = Math.sqrt(energy / samples.length);
+  const now = performance.now();
 
-  try {
-    const healthResponse = await fetch('/api/health');
-    const health = await healthResponse.json();
-    if (!health.aiConfigured) {
-      throw new Error('GROQ_API_KEY is missing from the deployed server environment. Add it there, then restart or redeploy.');
+  if (recorder?.state === 'recording' && !requestInProgress && !assistantSpeaking) {
+    if (rms >= speechRmsThreshold) {
+      if (!voiceStartedAt) voiceStartedAt = now;
+      lastVoiceAt = now;
+    } else if (
+      voiceStartedAt &&
+      now - lastVoiceAt >= silenceAfterSpeechMs &&
+      lastVoiceAt - voiceStartedAt >= minimumSpeechMs
+    ) {
+      void submitUtterance(sessionId);
     }
-    if (!navigator.mediaDevices?.getUserMedia) {
-      throw new Error('Microphone access needs HTTPS (or localhost) and a supported browser.');
-    }
-    if (!supportedAudioType()) {
-      throw new Error('Audio recording is not supported by this browser. Try current Chrome or Edge.');
-    }
-    mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
-    sendBtn.disabled = false;
-    stopBtn.disabled = false;
-    appendLog('Ready', 'Speak, then choose Send to AI.');
-    if (!health.indianVoiceConfigured) {
-      appendLog('Voice setup', 'Add SARVAM_API_KEY in the server environment for clear Indian English and Marathi speech.');
-    }
-    beginRecording();
-  } catch (error) {
-    console.error('Could not start microphone:', error);
-    const message = error.name === 'NotAllowedError'
-      ? 'Allow microphone access in your browser, then try again.'
-      : error.name === 'NotFoundError'
-        ? 'No microphone was found. Connect one, then try again.'
-        : error.message || 'Could not start microphone.';
-    setStatus('Unable to start', 'error');
-    appendLog('Error', message);
-    startBtn.disabled = false;
   }
-});
+  vadFrame = requestAnimationFrame(monitorMicrophone);
+}
 
-sendBtn.addEventListener('click', async () => {
-  if (!recorder || recorder.state !== 'recording' || requestInProgress) return;
-
-  requestInProgress = true;
-  sendBtn.disabled = true;
-  setStatus('Preparing audio…');
-  await new Promise((resolve) => {
-    recorder.addEventListener('stop', resolve, { once: true });
-    recorder.stop();
+function stopRecorderAndGetBlob() {
+  const activeRecorder = recorder;
+  recorder = null;
+  if (!activeRecorder || activeRecorder.state !== 'recording') {
+    return Promise.resolve(new Blob(audioChunks));
+  }
+  return new Promise((resolve) => {
+    activeRecorder.addEventListener('stop', () => {
+      resolve(new Blob(audioChunks, { type: activeRecorder.mimeType }));
+    }, { once: true });
+    activeRecorder.stop();
   });
+}
 
-  const blob = new Blob(audioChunks, { type: recorder.mimeType });
-  const extension = blob.type.includes('mp4') ? 'm4a' : blob.type.includes('ogg') ? 'ogg' : 'webm';
-  if (!blob.size) {
-    requestInProgress = false;
-    appendLog('Error', 'No audio was recorded. Try speaking again.');
-    beginRecording();
-    return;
-  }
-
-  setStatus('Transcribing and thinking…');
-  appendLog('You', 'Processing your message…');
-  const form = new FormData();
-  form.append('audio', blob, `voice.${extension}`);
-  form.append('history', JSON.stringify(history));
+async function submitUtterance(currentSession) {
+  if (requestInProgress || !sessionActive || currentSession !== sessionId) return;
+  requestInProgress = true;
+  setStatus('Thinking…');
 
   try {
+    const blob = await stopRecorderAndGetBlob();
+    if (!sessionActive || currentSession !== sessionId) return;
+    if (!blob.size) {
+      setStatus('Listening…', 'active');
+      requestInProgress = false;
+      beginRecording();
+      return;
+    }
+
+    const extension = blob.type.includes('mp4') ? 'm4a' : blob.type.includes('ogg') ? 'ogg' : 'webm';
+    const form = new FormData();
+    form.append('audio', blob, `voice.${extension}`);
+    form.append('history', JSON.stringify(history));
     const response = await fetch('/api/voice-chat', { method: 'POST', body: form });
     const result = await response.json();
     if (!response.ok) throw new Error(result.error || `Request failed (${response.status}).`);
+    if (!sessionActive || currentSession !== sessionId) return;
 
-    // Replace the temporary processing line with the actual transcription.
-    transcriptBox.lastElementChild?.remove();
-    appendLog('You', result.transcript);
-    appendLog('AI', result.reply);
+    addTurn(result.transcript, result.reply);
     history.push({ role: 'user', content: result.transcript }, { role: 'assistant', content: result.reply });
     history = history.slice(-10);
-    loadHistory();
-    const speaking = speakReply(result);
-    if (!speaking) appendLog('Voice', 'Speech synthesis is not available in this browser.');
-    if (!assistantSpeaking) setStatus('Listening…', 'active');
+    const voicePlayed = speakReply(result, currentSession);
+    voiceNotice = voicePlayed ? '' : 'For Indian English/Marathi voice, add SARVAM_API_KEY or install en-IN/mr-IN voices.';
   } catch (error) {
-    console.error('Voice request failed:', error);
-    setStatus('Request failed', 'error');
-    appendLog('Error', error.message);
+    if (sessionActive && currentSession === sessionId) setStatus(error.message, 'error');
   } finally {
     requestInProgress = false;
-    if (mediaStream?.active) {
-      if (!assistantSpeaking) beginRecording();
-    } else {
-      startBtn.disabled = false;
-    }
+    if (sessionActive && currentSession === sessionId && !assistantSpeaking) beginRecording();
+    if (!sessionActive) toggleAgentBtn.disabled = false;
   }
-});
+}
 
-stopBtn.addEventListener('click', () => {
-  if (recorder?.state === 'recording') recorder.stop();
-  if (mediaStream) {
-    mediaStream.getTracks().forEach((track) => track.stop());
+async function startAgent() {
+  if (starting || requestInProgress) return;
+  starting = true;
+  toggleAgentBtn.disabled = true;
+  setStatus('Starting…');
+  try {
+    if (!navigator.mediaDevices?.getUserMedia) {
+      throw new Error('Microphone access requires HTTPS and a supported browser.');
+    }
+    if (!supportedAudioType()) throw new Error('Audio recording is not supported by this browser.');
+    const healthResponse = await fetch('/api/health');
+    const health = await healthResponse.json();
+    if (!health.aiConfigured) throw new Error('The server is missing GROQ_API_KEY.');
+
+    mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+    audioContext = new (window.AudioContext || window.webkitAudioContext)();
+    await audioContext.resume();
+    analyser = audioContext.createAnalyser();
+    analyser.fftSize = 2048;
+    analyserSamples = new Float32Array(analyser.fftSize);
+    sourceNode = audioContext.createMediaStreamSource(mediaStream);
+    sourceNode.connect(analyser);
+
+    sessionId += 1;
+    sessionActive = true;
+    history = [];
+    transcriptBox.replaceChildren();
+    toggleAgentBtn.textContent = 'Stop voice agent';
+    toggleAgentBtn.classList.add('active');
+    toggleAgentBtn.disabled = false;
+    beginRecording();
+    monitorMicrophone();
+  } catch (error) {
+    if (mediaStream) mediaStream.getTracks().forEach((track) => track.stop());
     mediaStream = null;
+    setStatus(error.name === 'NotAllowedError' ? 'Allow microphone access to start.' : error.message, 'error');
+    toggleAgentBtn.disabled = false;
+  } finally {
+    starting = false;
   }
-  if ('speechSynthesis' in window) window.speechSynthesis.cancel();
-  if (replyAudio) {
-    replyAudio.pause();
-    replyAudio = null;
-  }
-  assistantSpeaking = false;
+}
+
+function stopAgent() {
+  sessionActive = false;
+  sessionId += 1;
+  cancelAnimationFrame(vadFrame);
+  if (recorder?.state === 'recording') recorder.stop();
   recorder = null;
   audioChunks = [];
-  sendBtn.disabled = true;
-  stopBtn.disabled = true;
-  startBtn.disabled = requestInProgress;
-  setStatus('Disconnected');
+  if (mediaStream) mediaStream.getTracks().forEach((track) => track.stop());
+  mediaStream = null;
+  sourceNode?.disconnect();
+  sourceNode = null;
+  analyser = null;
+  analyserSamples = null;
+  if (audioContext) void audioContext.close();
+  audioContext = null;
+  if (replyAudio) replyAudio.pause();
+  replyAudio = null;
+  assistantSpeaking = false;
+  if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+  toggleAgentBtn.textContent = 'Start voice agent';
+  toggleAgentBtn.classList.remove('active');
+  toggleAgentBtn.disabled = requestInProgress;
+  setStatus('Stopped');
+}
+
+toggleAgentBtn.addEventListener('click', () => {
+  if (sessionActive) stopAgent();
+  else void startAgent();
 });

@@ -4,7 +4,7 @@ const transcriptBox = document.getElementById('transcriptBox');
 
 const silenceAfterSpeechMs = 1200;
 const minimumSpeechMs = 450;
-const speechRmsThreshold = 0.015;
+const speechRmsThreshold = 0.01;
 
 let sessionActive = false;
 let starting = false;
@@ -50,6 +50,19 @@ function addTurn(input, output) {
     line.append(heading, document.createTextNode(text));
     turn.appendChild(line);
   }
+  transcriptBox.appendChild(turn);
+  transcriptBox.scrollTop = transcriptBox.scrollHeight;
+}
+
+function addOutputNotice(message) {
+  const turn = document.createElement('article');
+  turn.className = 'turn notice';
+  const line = document.createElement('p');
+  const heading = document.createElement('span');
+  heading.className = 'label';
+  heading.textContent = 'Output';
+  line.append(heading, document.createTextNode(message));
+  turn.appendChild(line);
   transcriptBox.appendChild(turn);
   transcriptBox.scrollTop = transcriptBox.scrollHeight;
 }
@@ -110,7 +123,8 @@ function beginRecording() {
   if (!sessionActive || requestInProgress || assistantSpeaking || !mediaStream) return;
   const mimeType = supportedAudioType();
   if (!mimeType) {
-    setStatus('This browser cannot record audio.', 'error');
+    addOutputNotice('This browser cannot record audio. Try the latest Chrome or Edge.');
+    stopAgent();
     return;
   }
 
@@ -192,8 +206,9 @@ async function submitUtterance(currentSession) {
     history = history.slice(-10);
     const voicePlayed = speakReply(result, currentSession);
     voiceNotice = voicePlayed ? '' : 'For Indian English/Marathi voice, add SARVAM_API_KEY or install en-IN/mr-IN voices.';
+    if (!voicePlayed) addOutputNotice('I could not play a voice reply. Check that audio is enabled and add SARVAM_API_KEY on the server for Indian English and Marathi.');
   } catch (error) {
-    if (sessionActive && currentSession === sessionId) setStatus(error.message, 'error');
+    if (sessionActive && currentSession === sessionId) addOutputNotice(error.message || 'I could not process that recording. Please try again.');
   } finally {
     requestInProgress = false;
     if (sessionActive && currentSession === sessionId && !assistantSpeaking) beginRecording();
@@ -215,7 +230,10 @@ async function startAgent() {
     const health = await healthResponse.json();
     if (!health.aiConfigured) throw new Error('The server is missing GROQ_API_KEY.');
 
-    mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+    mediaStream = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+      video: false
+    });
     audioContext = new (window.AudioContext || window.webkitAudioContext)();
     await audioContext.resume();
     analyser = audioContext.createAnalyser();
@@ -236,7 +254,10 @@ async function startAgent() {
   } catch (error) {
     if (mediaStream) mediaStream.getTracks().forEach((track) => track.stop());
     mediaStream = null;
-    setStatus(error.name === 'NotAllowedError' ? 'Allow microphone access to start.' : error.message, 'error');
+    const message = error.name === 'NotAllowedError'
+      ? 'Microphone permission was denied. Allow microphone access in your browser, then start again.'
+      : error.message || 'Could not start the voice agent.';
+    addOutputNotice(message);
     toggleAgentBtn.disabled = false;
   } finally {
     starting = false;

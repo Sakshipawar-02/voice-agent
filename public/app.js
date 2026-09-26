@@ -1,184 +1,139 @@
-const wsProtocol = window.location.protocol === "https:" ? "wss://" : "ws://";
-const socket = new WebSocket(`${wsProtocol}${window.location.host}`);
+let socket = null;
+let audioContext = null;
+let mediaStream = null;
+let scriptProcessor = null;
 
-const recordBtn = document.getElementById("recordBtn");
-const statusDiv = document.getElementById("status");
-const chatLog = document.getElementById("chatLog");
-const clearBtn = document.getElementById("clearBtn");
-const voiceSelect = document.getElementById("voiceSelect");
+const startBtn = document.getElementById('startBtn');
+const stopBtn = document.getElementById('stopBtn');
+const statusBadge = document.getElementById('statusBadge');
+const transcriptBox = document.getElementById('transcriptBox');
 
-const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-let recognition = null;
-let isListening = false;
-
-const synth = window.speechSynthesis;
-let voices = [];
-
-function populateVoiceList() {
-  voices = synth.getVoices();
-  voiceSelect.innerHTML = "";
-
-  voices.forEach((voice, index) => {
-    const option = document.createElement("option");
-    option.textContent = `${voice.name} (${voice.lang})`;
-    option.setAttribute("data-lang", voice.lang);
-    option.setAttribute("data-name", voice.name);
-    option.value = index;
-    voiceSelect.appendChild(option);
-  });
+function setStatus(text, state = 'normal') {
+  statusBadge.textContent = text;
+  statusBadge.className = 'status-badge';
+  if (state === 'active') statusBadge.classList.add('active');
+  if (state === 'error') statusBadge.classList.add('error');
 }
 
-populateVoiceList();
-if (speechSynthesis.onvoiceschanged !== undefined) {
-  speechSynthesis.onvoiceschanged = populateVoiceList;
+function appendLog(text) {
+  const line = document.createElement('div');
+  line.style.marginBottom = '0.5rem';
+  line.textContent = `[${new Date().toLocaleTimeString()}] ${text}`;
+  transcriptBox.appendChild(line);
+  transcriptBox.scrollTop = transcriptBox.scrollHeight;
 }
 
-if (SpeechRecognition) {
-  recognition = new SpeechRecognition();
-  recognition.continuous = false;
-  recognition.interimResults = false;
-  recognition.lang = "mr-IN"; // Default recognition language
+startBtn.addEventListener('click', async () => {
+  try {
+    startBtn.disabled = true;
+    setStatus('Connecting...');
+    transcriptBox.innerHTML = '';
+    appendLog('Initializing session...');
 
-  recognition.onstart = () => {
-    isListening = true;
-    recordBtn.textContent = "Listening...";
-    recordBtn.classList.add("recording");
-    statusDiv.textContent = "Listening to your voice...";
-    statusDiv.style.color = "blue";
-  };
+    // 1. Initialize AudioContext directly inside user click handler
+    audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+    if (audioContext.state === 'suspended') {
+      await audioContext.resume();
+    }
 
-  recognition.onresult = event => {
-    const transcript = event.results[0][0].transcript;
-    statusDiv.textContent = `You said: "${transcript}"`;
-    statusDiv.style.color = "black";
+    // 2. Request microphone access
+    mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+    appendLog('Microphone access granted.');
 
-    socket.send(JSON.stringify({ type: "USER_PROMPT", text: transcript }));
-  };
+    // 3. Resolve dynamic WebSocket path (works on localhost and production HTTPS/WSS)
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const wsUrl = `${protocol}//${window.location.host}`;
+    
+    socket = new WebSocket(wsUrl);
 
-  recognition.onerror = event => {
-    console.error("Speech recognition error:", event.error);
-    statusDiv.textContent = `Error: ${event.error}`;
-    statusDiv.style.color = "red";
-    resetRecordButton();
-  };
+    socket.onopen = () => {
+      setStatus('Connected & Streaming', 'active');
+      stopBtn.disabled = false;
+      appendLog('WebSocket connected. Streaming audio...');
 
-  recognition.onend = () => {
-    resetRecordButton();
-  };
-} else {
-  statusDiv.textContent = "Web Speech API is not supported in this browser.";
-  statusDiv.style.color = "red";
-  recordBtn.disabled = true;
-}
+      // Send start control signal
+      socket.send(JSON.stringify({ type: 'start' }));
 
-function resetRecordButton() {
-  isListening = false;
-  recordBtn.textContent = "Start Talking";
-  recordBtn.classList.remove("recording");
-}
+      // 4. Hook up audio node processing
+      const source = audioContext.createMediaStreamSource(mediaStream);
+      scriptProcessor = audioContext.createScriptProcessor(4096, 1, 1);
 
-recordBtn.addEventListener("click", () => {
-  if (!recognition) return;
+      source.connect(scriptProcessor);
+      scriptProcessor.connect(audioContext.destination);
 
-  if (isListening) {
-    recognition.stop();
-  } else {
-    recognition.start();
+      scriptProcessor.onaudioprocess = (e) => {
+        if (!socket || socket.readyState !== WebSocket.OPEN) return;
+
+        const inputBuffer = e.inputBuffer.getChannelData(0);
+        // Convert Float32 to 16-bit PCM Int16Array
+        const pcmBuffer = new Int16Array(inputBuffer.length);
+        for (let i = 0; i < inputBuffer.length; i++) {
+          pcmBuffer[i] = Math.max(-1, Math.min(1, inputBuffer[i])) * 0x7fff;
+        }
+
+        socket.send(pcmBuffer.buffer);
+      };
+    };
+
+    socket.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        if (data.type === 'status') {
+          appendLog(data.message);
+        } else if (data.text) {
+          appendLog(`AI: ${data.text}`);
+        }
+      } catch (e) {
+        console.log('Raw message received:', event.data);
+      }
+    };
+
+    socket.onerror = (err) => {
+      console.error('WebSocket Error:', err);
+      setStatus('Connection Error', 'error');
+      appendLog('WebSocket encountered an error.');
+      stopSession();
+    };
+
+    socket.onclose = () => {
+      setStatus('Disconnected');
+      appendLog('WebSocket connection closed.');
+      stopSession();
+    };
+
+  } catch (err) {
+    console.error('Error starting voice agent:', err);
+    setStatus('Mic Access Denied / Error', 'error');
+    appendLog(`Error: ${err.message}`);
+    startBtn.disabled = false;
   }
 });
 
-socket.onmessage = event => {
-  const data = JSON.parse(event.data);
-
-  if (data.type === "AGENT_RESPONSE") {
-    appendLog(data.text, "agent");
-    speakResponse(data.text, data.language);
-  } else if (data.type === "ERROR") {
-    appendLog(`Error: ${data.message}`, "error");
-    statusDiv.textContent = "Error occurred.";
-    statusDiv.style.color = "red";
-  }
-};
-
-function speakResponse(text, langCode) {
-  if (synth.speaking) {
-    synth.cancel();
-  }
-
-  // Pre-process Devanagari text to remove trailing pronunciation bugs
-  let spokenText = text;
-  if (langCode === "mr" || /[\u0900-\u097f]/.test(text)) {
-    spokenText = spokenText
-      .replace(/नक्कीच/g, "नक्की,")
-      .replace(/आहेच/g, "आहे,");
-  }
-
-  const utterance = new SpeechSynthesisUtterance(spokenText);
-  utterance.rate = 0.90; // Speech speed for natural Indian cadence
-  utterance.pitch = 1.0;
-
-  if (voiceSelect.value !== "") {
-    utterance.voice = voices[voiceSelect.value];
-  } else {
-    // Select best matching Indian accent voice
-    const matchedVoice = voices.find(v => 
-      v.lang.includes("mr") || 
-      v.lang.includes("hi-IN") || 
-      v.lang.includes("en-IN")
-    );
-    if (matchedVoice) utterance.voice = matchedVoice;
-  }
-
-  utterance.onstart = () => {
-    statusDiv.textContent = "Aarya is speaking...";
-    statusDiv.style.color = "green";
-  };
-
-  utterance.onend = () => {
-    statusDiv.textContent = "Ready.";
-    statusDiv.style.color = "green";
-  };
-
-  synth.speak(utterance);
-}
-
-function appendLog(message, sender) {
-  const div = document.createElement("div");
-  div.className = `log-entry ${sender}`;
-  const timestamp = new Intl.DateTimeFormat('en-IN', {
-    dateStyle: 'short',
-    timeStyle: 'medium',
-    timeZone: 'Asia/Kolkata'
-  }).format(new Date());
-
-  div.textContent = `${message} #${timestamp}`;
-  chatLog.appendChild(div);
-  chatLog.scrollTop = chatLog.scrollHeight;
-}
-
-async function loadHistory() {
-  try {
-    const res = await fetch("/api/history");
-    const data = await res.json();
-    chatLog.innerHTML = "";
-    data.reverse().forEach(row => {
-      appendLog(`You: ${row.user_prompt}`, "user");
-      appendLog(`Aarya: ${row.agent_response}`, "agent");
-    });
-  } catch (err) {
-    console.error("Failed to load history:", err);
-  }
-}
-
-clearBtn.addEventListener("click", async () => {
-  try {
-    await fetch("/api/history", { method: "DELETE" });
-    chatLog.innerHTML = "";
-    statusDiv.textContent = "Logs cleared.";
-    statusDiv.style.color = "green";
-  } catch (err) {
-    console.error("Failed to clear history:", err);
-  }
+stopBtn.addEventListener('click', () => {
+  stopSession();
 });
 
-loadHistory();
+function stopSession() {
+  if (scriptProcessor) {
+    scriptProcessor.disconnect();
+    scriptProcessor = null;
+  }
+  if (mediaStream) {
+    mediaStream.getTracks().forEach((track) => track.stop());
+    mediaStream = null;
+  }
+  if (audioContext) {
+    audioContext.close();
+    audioContext = null;
+  }
+  if (socket) {
+    if (socket.readyState === WebSocket.OPEN) {
+      socket.close();
+    }
+    socket = null;
+  }
+
+  startBtn.disabled = false;
+  stopBtn.disabled = true;
+  setStatus('Disconnected');
+}

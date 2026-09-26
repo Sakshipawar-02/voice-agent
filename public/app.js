@@ -5,6 +5,7 @@ const [start, stop, status, user, answer, table, clear] =
 
 let currentAudio = null;
 
+// === SPEECH TO TEXT (STT) LOGIC ===
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
 
 if (!SR) {
@@ -76,19 +77,24 @@ function stopSpeaking() {
   }
 }
 
-// Improved Natural Female Voice Configuration
+// === HUMAN-LIKE NATURAL FEMALE TTS ENGINE ===
 function speak(text, language) {
   stopSpeaking();
 
   const isDevanagari = /[\u0900-\u097F]/.test(text);
 
+  // Soften harsh period stops into natural conversational pauses
+  const conversationalText = text.replace(/([.!?])\s*/g, "$1 ");
+
   const speakNow = () => {
     const voices = speechSynthesis.getVoices();
 
+    // Priority list for soft, natural female voices across OS/Browsers
+    const femaleKeywords = ["swara", "sangeeta", "kalpana", "neerja", "heera", "zira", "google hindi", "google marathi", "google indian english", "natural", "female"];
+    const maleKeywords = ["male", "david", "ravi", "hemant", "mark", "george", "guy"];
+
     const isExplicitFemale = (v) => {
       const name = v.name.toLowerCase();
-      const femaleKeywords = ["zira", "heera", "swara", "kalpana", "neerja", "sangeeta", "female", "natural", "google"];
-      const maleKeywords = ["male", "david", "ravi", "hemant", "mark", "george"];
       return femaleKeywords.some(k => name.includes(k)) && !maleKeywords.some(k => name.includes(k));
     };
 
@@ -96,36 +102,39 @@ function speak(text, language) {
 
     if (isDevanagari) {
       selectedVoice = voices.find(v => (v.lang.includes("mr") || v.lang.includes("hi")) && isExplicitFemale(v)) ||
-                      voices.find(v => v.lang.includes("hi") || v.lang.includes("mr"));
+                      voices.find(v => v.lang.includes("mr-IN") || v.lang.includes("hi-IN"));
     } else {
       selectedVoice = voices.find(v => v.lang.includes("en-IN") && isExplicitFemale(v)) ||
                       voices.find(v => v.lang.includes("en") && isExplicitFemale(v));
     }
 
     if (selectedVoice) {
-      const utterance = new SpeechSynthesisUtterance(text);
+      const utterance = new SpeechSynthesisUtterance(conversationalText);
       utterance.voice = selectedVoice;
       utterance.lang = selectedVoice.lang;
-      utterance.rate = 1.0;  // Standard natural speaking speed
-      utterance.pitch = 1.15; // Natural warm female pitch level
+      
+      // Conversational flow parameters: smooth rate and soft female pitch
+      utterance.rate = 0.92;  
+      utterance.pitch = 1.22; 
 
       utterance.onstart = () => { if (status) status.innerText = "🔊 Speaking..."; };
       utterance.onend = () => { if (status) status.innerText = "Ready"; };
       speechSynthesis.speak(utterance);
     } else {
+      // High-quality online audio fallback when system lacks installed female voices
       const langCode = isDevanagari ? "mr" : "en";
-      const encodedText = encodeURIComponent(text);
+      const encodedText = encodeURIComponent(conversationalText);
       const audioUrl = `https://translate.google.com/translate_tts?ie=UTF-8&q=${encodedText}&tl=${langCode}&client=tw-ob`;
 
       currentAudio = new Audio(audioUrl);
-      currentAudio.playbackRate = 1.0;
+      currentAudio.playbackRate = 0.95;
 
       if (status) status.innerText = "🔊 Speaking...";
       currentAudio.play().catch(() => {
-        const utterance = new SpeechSynthesisUtterance(text);
+        const utterance = new SpeechSynthesisUtterance(conversationalText);
         utterance.lang = isDevanagari ? "hi-IN" : "en-IN";
-        utterance.pitch = 1.20;
-        utterance.rate = 0.95;
+        utterance.pitch = 1.25;
+        utterance.rate = 0.90;
         utterance.onstart = () => { if (status) status.innerText = "🔊 Speaking..."; };
         utterance.onend = () => { if (status) status.innerText = "Ready"; };
         speechSynthesis.speak(utterance);

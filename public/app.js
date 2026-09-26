@@ -3,6 +3,9 @@ const ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${l
 const [start, stop, status, user, answer, table, clear] = 
   ["startMicBtn", "stopAgentBtn", "statusIndicator", "userQuery", "agentAnswer", "dashboardTable", "clearBtn"].map(id => document.getElementById(id));
 
+// Active Audio element for Google TTS fallback
+let currentAudio = null;
+
 // === SPEECH TO TEXT (STT) LOGIC ===
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
 
@@ -17,7 +20,7 @@ if (!SR) {
 
   if (start) {
     start.onclick = () => {
-      speechSynthesis.cancel();
+      stopSpeaking();
       try { recognition.start(); } catch {}
     };
   }
@@ -67,59 +70,81 @@ ws.onmessage = e => {
   }
 };
 
-// === TEXT TO SPEECH (TTS) LOGIC (FORCE FEMALE MARATHI/HINDI VOICE) ===
-function speak(text, language) {
+function stopSpeaking() {
   speechSynthesis.cancel();
+  if (currentAudio) {
+    currentAudio.pause();
+    currentAudio = null;
+  }
+}
+
+// === DUAL-LAYER TEXT TO SPEECH (TTS) LOGIC FOR FEMALE VOICE ===
+function speak(text, language) {
+  stopSpeaking();
 
   const isDevanagari = /[\u0900-\u097F]/.test(text);
 
   const speakNow = () => {
     const voices = speechSynthesis.getVoices();
-    let voice = null;
 
-    // Filter female voices explicitly and exclude male voices (Ravi, David, Male, etc.)
-    const isFemaleVoice = (v) => {
+    // 1. Strict female voice detection logic
+    const isExplicitFemale = (v) => {
       const name = v.name.toLowerCase();
-      return (
-        name.includes("female") ||
-        name.includes("swara") ||
-        name.includes("kalpana") ||
-        name.includes("heera") ||
-        name.includes("neerja") ||
-        name.includes("sangeeta") ||
-        name.includes("zira") ||
-        name.includes("google") ||
-        name.includes("natural")
-      ) && !name.includes("david") && !name.includes("ravi") && !name.includes("male");
+      const femaleKeywords = ["female", "swara", "kalpana", "heera", "neerja", "sangeeta", "zira", "google", "natural"];
+      const maleKeywords = ["male", "david", "ravi", "hemant", "mark", "george"];
+      
+      const hasFemaleName = femaleKeywords.some(k => name.includes(k));
+      const hasMaleName = maleKeywords.some(k => name.includes(k));
+
+      return hasFemaleName && !hasMaleName;
     };
 
+    let selectedVoice = null;
+
     if (isDevanagari) {
-      voice =
-        voices.find(v => (v.lang.includes("mr") || v.lang.includes("hi")) && isFemaleVoice(v)) ||
-        voices.find(v => v.lang.includes("mr-IN") || v.lang.includes("hi-IN"));
+      selectedVoice = voices.find(v => (v.lang.includes("mr") || v.lang.includes("hi")) && isExplicitFemale(v));
     } else {
-      voice =
-        voices.find(v => v.lang.includes("en-IN") && isFemaleVoice(v)) ||
-        voices.find(v => isFemaleVoice(v));
+      selectedVoice = voices.find(v => v.lang.includes("en-IN") && isExplicitFemale(v)) ||
+                      voices.find(v => isExplicitFemale(v));
     }
 
-    const utterance = new SpeechSynthesisUtterance(text);
+    // 2. If a native WebSpeech female voice exists, use it
+    if (selectedVoice) {
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.voice = selectedVoice;
+      utterance.lang = selectedVoice.lang;
+      utterance.rate = 0.90;
+      utterance.pitch = 1.30;
 
-    if (voice) {
-      utterance.voice = voice;
-      utterance.lang = voice.lang;
+      utterance.onstart = () => { if (status) status.innerText = "🔊 Speaking..."; };
+      utterance.onend = () => { if (status) status.innerText = "Ready"; };
+      speechSynthesis.speak(utterance);
     } else {
-      utterance.lang = isDevanagari ? "hi-IN" : "en-IN";
+      // 3. Fallback: Use Google Translate TTS endpoint (guaranteed female voice audio stream)
+      const langCode = isDevanagari ? "mr" : "en";
+      const encodedText = encodeURIComponent(text);
+      const audioUrl = `https://translate.google.com/translate_tts?ie=UTF-8&q=${encodedText}&tl=${langCode}&client=tw-ob`;
+
+      currentAudio = new Audio(audioUrl);
+      currentAudio.playbackRate = 0.95;
+
+      if (status) status.innerText = "🔊 Speaking...";
+      currentAudio.play().catch(err => {
+        console.warn("Google TTS fallback failed, falling back to default WebSpeech:", err);
+        // Fallback to basic utterance if audio playback fails
+        const utterance = new SpeechSynthesisUtterance(text);
+        utterance.lang = isDevanagari ? "hi-IN" : "en-IN";
+        utterance.pitch = 1.40;
+        utterance.rate = 0.88;
+        utterance.onstart = () => { if (status) status.innerText = "🔊 Speaking..."; };
+        utterance.onend = () => { if (status) status.innerText = "Ready"; };
+        speechSynthesis.speak(utterance);
+      });
+
+      currentAudio.onended = () => {
+        if (status) status.innerText = "Ready";
+      };
     }
-
-    // Force higher pitch (1.35) and slightly slower speech rate (0.88) to guarantee female tone
-    utterance.rate = 0.88;
-    utterance.pitch = 1.35;
-
-    utterance.onstart = () => { if (status) status.innerText = "🔊 Speaking..."; };
-    utterance.onend = () => { if (status) status.innerText = "Ready"; };
-
-    speechSynthesis.speak(utterance);
   };
 
   if (speechSynthesis.getVoices().length > 0) {
@@ -131,7 +156,7 @@ function speak(text, language) {
 
 if (stop) {
   stop.onclick = () => {
-    speechSynthesis.cancel();
+    stopSpeaking();
     if (status) status.innerText = "Voice stopped";
   };
 }

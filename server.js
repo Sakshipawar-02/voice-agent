@@ -47,7 +47,7 @@ function detectLanguage(text) {
   
   if (
     /[\u0900-\u097f]/.test(t) ||
-    /\b(marathi|madhe|bol|kay|kaay|karat|kart|aahe|ahe|mala|tula|kasa|kashi|kuthe|nahi|sang|nav|naav|naave|song|sanga|tujhe|majha)\b/i.test(t)
+    /\b(marathi|madhe|bol|bola|kay|kaay|karat|kart|aahe|ahe|mala|tula|kasa|kashi|kuthe|nahi|sang|nav|naav|naave|song|sanga|tujhe|majha)\b/i.test(t)
   ) {
     return "mr";
   }
@@ -82,15 +82,15 @@ wss.on("connection", ws => {
       const lang = detectLanguage(text);
       const cleanText = text.toLowerCase().replace(/[^\w\s\u0900-\u097f]/g, "").trim();
 
-      // 1. Direct Intercept for Language Request
-      if (/\b(marathi madhe bol|marathi bol|speak in marathi)\b/i.test(cleanText)) {
+      // Direct Intercept for Language Request
+      if (/\b(marathi madhe bol|marathi madhe bola|marathi bol|marathi bola|speak in marathi)\b/i.test(cleanText)) {
         const marathiResponse = "हो नक्कीच! मी आता तुमच्याशी मराठीत बोलेन. सांगा, मी तुम्हाला कशी मदत करू?";
         db.run("INSERT INTO interactions (user_prompt, agent_response) VALUES (?, ?)", [text, marathiResponse]);
         ws.send(JSON.stringify({ type: "AGENT_RESPONSE", text: marathiResponse, language: "mr" }));
         return;
       }
 
-      // 2. Direct Intercept for Identity / Name Questions
+      // Direct Intercept for Name / Identity Questions
       if (
         (/\b(nav|naav|naam|name|नाव)\b/i.test(cleanText) && /\b(kay|kaay|kya|what|kon|who|काय)\b/i.test(cleanText)) ||
         /\b(tu kon aahes|tu kon ahes|who are you|tumhara naam kya hai|तू कोण आहेस)\b/i.test(cleanText)
@@ -105,7 +105,7 @@ wss.on("connection", ws => {
         return;
       }
 
-      // 3. Direct Intercept for Greetings
+      // Direct Intercept for Greetings
       if (/^(hello|hi|hey|namaste|namaskar|नमस्कार)\b/i.test(cleanText)) {
         let greetingResponse = "नमस्कार! मी तुला कशी मदत करू शकते?";
         if (lang === "hi") greetingResponse = "नमस्ते! मैं आपकी क्या मदद कर सकती हूँ?";
@@ -117,7 +117,7 @@ wss.on("connection", ws => {
         return;
       }
 
-      // 4. Conversational Model Execution
+      // Groq Model Call - STRICTLY active production models only
       const rule = LANG_RULES[lang] || LANG_RULES.en;
       const messagesPayload = [
         {
@@ -132,8 +132,7 @@ CRITICAL FOR SPEECH SYNTHESIS: Speak like a human talking directly to a friend. 
 
       const candidateModels = [
         "llama-3.3-70b-versatile",
-        "llama-3.1-8b-instant",
-        "mixtral-8x7b-32768"
+        "llama-3.1-8b-instant"
       ];
 
       let answer = null;

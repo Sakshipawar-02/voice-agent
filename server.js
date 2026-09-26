@@ -4,6 +4,7 @@ import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
 import multer from 'multer';
 import Groq, { toFile } from 'groq-sdk';
+import { SarvamAIClient } from 'sarvamai';
 import { initDB, saveConversation, getConversations } from './database.js';
 
 dotenv.config();
@@ -14,6 +15,9 @@ const app = express();
 const port = Number(process.env.PORT) || 3000;
 const groq = process.env.GROQ_API_KEY && !process.env.GROQ_API_KEY.includes('your_actual')
   ? new Groq({ apiKey: process.env.GROQ_API_KEY })
+  : null;
+const sarvam = process.env.SARVAM_API_KEY
+  ? new SarvamAIClient({ apiSubscriptionKey: process.env.SARVAM_API_KEY })
   : null;
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -33,9 +37,11 @@ function normalizeLanguageTag(value) {
   const normalized = String(value || '').trim();
   if (!normalized) return 'en';
   const languageNameTag = languageNames[normalized.toLowerCase()];
-  if (languageNameTag) return languageNameTag;
+  if (languageNameTag) return ['en', 'mr'].includes(languageNameTag) ? `${languageNameTag}-IN` : languageNameTag;
   try {
-    return new Intl.Locale(normalized).toString();
+    const locale = new Intl.Locale(normalized).toString();
+    const baseLanguage = locale.split('-')[0].toLowerCase();
+    return ['en', 'mr'].includes(baseLanguage) ? `${baseLanguage}-IN` : locale;
   } catch {
     return 'en';
   }
@@ -46,7 +52,7 @@ app.use(express.static(path.join(__dirname, 'public')));
 initDB();
 
 app.get('/api/health', (req, res) => {
-  res.json({ status: 'ok', service: 'voice-agent', aiConfigured: Boolean(groq) });
+  res.json({ status: 'ok', service: 'voice-agent', aiConfigured: Boolean(groq), indianVoiceConfigured: Boolean(sarvam) });
 });
 
 app.get('/api/history', async (req, res) => {
@@ -143,13 +149,29 @@ app.post('/api/voice-chat', limitVoiceRequests, upload.single('audio'), async (r
     const language = normalizeLanguageTag(answer.language);
     if (!reply) throw new Error('Groq returned an empty response.');
 
+    let audioBase64 = null;
+    if (sarvam && ['en-IN', 'mr-IN'].includes(language) && reply.length <= 2500) {
+      try {
+        const speech = await sarvam.textToSpeech.convert({
+          text: reply,
+          model: 'bulbul:v3',
+          language_code: language,
+          speaker: process.env.SARVAM_TTS_SPEAKER || 'ishita',
+          pace: 0.95
+        });
+        audioBase64 = speech.audios?.[0] || null;
+      } catch (error) {
+        console.error('[Sarvam] Indian voice synthesis failed; browser voice will be used:', error);
+      }
+    }
+
     try {
       await saveConversation(userText, reply);
     } catch (error) {
       // Conversation still succeeds if persistence is temporarily unavailable.
       console.error('[DB] Could not save conversation:', error);
     }
-    res.json({ transcript: userText, reply, language });
+    res.json({ transcript: userText, reply, language, audioBase64 });
   } catch (error) {
     console.error('[Groq] Voice request failed:', error);
     const status = error.status === 401 ? 503 : 502;

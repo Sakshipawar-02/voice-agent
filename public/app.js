@@ -13,6 +13,7 @@ let audioChunks = [];
 let history = [];
 let requestInProgress = false;
 let assistantSpeaking = false;
+let replyAudio = null;
 
 function setStatus(text, state = 'normal') {
   statusBadge.textContent = text;
@@ -85,7 +86,13 @@ function supportedAudioType() {
     .find((type) => MediaRecorder.isTypeSupported(type)) || '';
 }
 
-function speakReply(text, languageTag) {
+function finishSpeaking() {
+  assistantSpeaking = false;
+  replyAudio = null;
+  if (mediaStream?.active && !requestInProgress) beginRecording();
+}
+
+function speakWithDeviceVoice(text, languageTag) {
   if (!('speechSynthesis' in window)) return false;
   const utterance = new SpeechSynthesisUtterance(text);
   utterance.lang = languageTag || 'en';
@@ -99,13 +106,28 @@ function speakReply(text, languageTag) {
 
   assistantSpeaking = true;
   setStatus('Speaking response…', 'active');
-  utterance.onend = utterance.onerror = () => {
-    assistantSpeaking = false;
-    if (mediaStream?.active && !requestInProgress) beginRecording();
-  };
+  utterance.onend = utterance.onerror = finishSpeaking;
   window.speechSynthesis.cancel();
   window.speechSynthesis.speak(utterance);
   return true;
+}
+
+function speakReply(result) {
+  if (result.audioBase64 && typeof Audio !== 'undefined') {
+    replyAudio = new Audio(`data:audio/wav;base64,${result.audioBase64}`);
+    assistantSpeaking = true;
+    setStatus('Speaking in Indian voice…', 'active');
+    replyAudio.onended = finishSpeaking;
+    replyAudio.onerror = () => {
+      appendLog('Voice', 'Indian voice playback failed; using a voice installed on this device.');
+      assistantSpeaking = false;
+      replyAudio = null;
+      if (!speakWithDeviceVoice(result.reply, result.language)) finishSpeaking();
+    };
+    replyAudio.play().catch(() => replyAudio?.onerror?.());
+    return true;
+  }
+  return speakWithDeviceVoice(result.reply, result.language);
 }
 
 function beginRecording() {
@@ -149,6 +171,9 @@ startBtn.addEventListener('click', async () => {
     sendBtn.disabled = false;
     stopBtn.disabled = false;
     appendLog('Ready', 'Speak, then choose Send to AI.');
+    if (!health.indianVoiceConfigured) {
+      appendLog('Voice setup', 'Add SARVAM_API_KEY in the server environment for clear Indian English and Marathi speech.');
+    }
     beginRecording();
   } catch (error) {
     console.error('Could not start microphone:', error);
@@ -201,7 +226,7 @@ sendBtn.addEventListener('click', async () => {
     history.push({ role: 'user', content: result.transcript }, { role: 'assistant', content: result.reply });
     history = history.slice(-10);
     loadHistory();
-    const speaking = speakReply(result.reply, result.language);
+    const speaking = speakReply(result);
     if (!speaking) appendLog('Voice', 'Speech synthesis is not available in this browser.');
     if (!assistantSpeaking) setStatus('Listening…', 'active');
   } catch (error) {
@@ -210,8 +235,11 @@ sendBtn.addEventListener('click', async () => {
     appendLog('Error', error.message);
   } finally {
     requestInProgress = false;
-    if (mediaStream?.active && !assistantSpeaking) beginRecording();
-    else startBtn.disabled = false;
+    if (mediaStream?.active) {
+      if (!assistantSpeaking) beginRecording();
+    } else {
+      startBtn.disabled = false;
+    }
   }
 });
 
@@ -222,6 +250,11 @@ stopBtn.addEventListener('click', () => {
     mediaStream = null;
   }
   if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+  if (replyAudio) {
+    replyAudio.pause();
+    replyAudio = null;
+  }
+  assistantSpeaking = false;
   recorder = null;
   audioChunks = [];
   sendBtn.disabled = true;

@@ -1,12 +1,11 @@
-import dotenv from "dotenv";
-dotenv.config();
-
+import "dotenv/config";
 import express from "express";
 import http from "http";
-import { WebSocketServer } from "ws";
+import WebSocket from "ws";
 import path from "path";
 import { fileURLToPath } from "url";
 import Groq from "groq-sdk";
+import { SarvamAI } from "sarvamai";
 import db from "./database.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -14,203 +13,80 @@ const __dirname = path.dirname(__filename);
 
 const app = express();
 const server = http.createServer(app);
-const wss = new WebSocketServer({ server });
+const wss = new WebSocket.Server({ server });
 
 const PORT = process.env.PORT || 3000;
-const ASSISTANT_NAME = "Aarya";
+const MODEL = "llama-3.3-70b-versatile";
 
 const groq = new Groq({
   apiKey: process.env.GROQ_API_KEY
 });
 
+const sarvam = new SarvamAI({
+  apiSubscriptionKey: process.env.SARVAM_API_KEY
+});
+
 app.use(express.static(path.join(__dirname, "public")));
 
-const LANG_RULES = {
-  mr: {
-    name: "Marathi",
-    script:
-      "Reply only in simple conversational Marathi using Devanagari. Use natural Pune-style spoken Marathi."
-  },
-
-  hi: {
-    name: "Hindi",
-    script:
-      "Reply only in simple natural spoken Hindi using Devanagari."
-  },
-
-  "hi-roman": {
-    name: "Roman Hindi",
-    script:
-      "Reply only in natural spoken Hindi using English letters."
-  },
-
-  en: {
-    name: "Indian English",
-    script:
-      "Reply in simple natural conversational Indian English."
-  }
-};
-
-// ================= LANGUAGE =================
-
 function detectLanguage(text) {
-  const t = text.toLowerCase().trim();
+  if (/[\u0900-\u097F]/.test(text)) {
+    if (/काय|कसा|कशी|कसे|तू|तुम्ही|मी|मला|तुला|आहे|नाही|करत|कुठे/.test(text))
+      return "mr-IN";
 
-  if (
-    /[\u0900-\u097f]/.test(t) ||
-    /\b(marathi|madhe|bol|bola|kay|kaay|karat|kart|aahe|ahe|mala|tula|kasa|kashi|kuthe|nahi|sang|sanga|naav|nav|tujhe|majha)\b/i.test(t)
-  ) {
-    return "mr";
+    return "hi-IN";
   }
 
-  if (
-    /\b(kaise|kaisa|kaisi|kya|aap|tum|main|mujhe|tumhe|hai|hoon|kyun|kahan|batao|hindi|naam)\b/i.test(t)
-  ) {
-    return "hi-roman";
-  }
+  if (/\b(kay|kasa|kashi|kase|mi|mala|tula|tumhi|aahe|nahi|karat|kuthe)\b/i.test(text))
+    return "mr-IN";
 
-  return "en";
+  if (/\b(hai|hain|aap|tum|mera|mujhe|kya|kaise|nahi)\b/i.test(text))
+    return "hi-IN";
+
+  return "en-IN";
 }
 
-// ================= HISTORY =================
-
-app.get("/api/history", (req, res) => {
-  db.all(
-    "SELECT * FROM interactions ORDER BY id DESC",
-    [],
-    (err, rows) => {
-      if (err) {
-        return res.status(500).json({ error: err.message });
-      }
-
-      res.json(rows || []);
-    }
-  );
-});
-
-app.delete("/api/history", (req, res) => {
-  db.run("DELETE FROM interactions", [], err => {
-    if (err) {
-      return res.status(500).json({ error: err.message });
-    }
-
-    res.json({ message: "History cleared" });
+async function generateVoice(text, language) {
+  const response = await sarvam.textToSpeech.convert({
+    text,
+    languageCode: language,
+    model: "bulbul:v3",
+    speaker: "priya",
+    pace: 1.0
   });
-});
 
-// ================= WEBSOCKET =================
+  return response.audios[0];
+}
 
 wss.on("connection", ws => {
-  ws.on("message", async msg => {
+  console.log("Client connected");
+
+  ws.on("message", async message => {
     try {
-      const { type, text } = JSON.parse(msg);
+      const data = JSON.parse(message);
 
-      if (type !== "USER_PROMPT" || !text) return;
+      if (data.type !== "USER_PROMPT") return;
 
-      const lang = detectLanguage(text);
-      const cleanText = text
-        .toLowerCase()
-        .replace(/[^\w\s\u0900-\u097f]/g, "")
-        .trim();
+      const text = data.text.trim();
+      const language = detectLanguage(text);
 
-      // Marathi request
-      if (
-        /\b(marathi madhe bol|marathi madhe bola|marathi bol|marathi bola|speak in marathi)\b/i.test(
-          cleanText
-        )
-      ) {
-        const response =
-          "हो नक्कीच! मी आता तुमच्याशी मराठीत बोलेन. सांगा, मी तुम्हाला कशी मदत करू?";
-
-        saveAndSend(text, response, "mr", ws);
-        return;
-      }
-
-      // Name
-      if (
-        (/\b(nav|naav|naam|name|नाव)\b/i.test(cleanText) &&
-          /\b(kay|kaay|kya|what|kon|who|काय)\b/i.test(cleanText)) ||
-        /\b(who are you|tu kon aahes|tu kon ahes|tumhara naam kya hai)\b/i.test(
-          cleanText
-        )
-      ) {
-        let response;
-
-        if (lang === "mr") {
-          response =
-            `माझे नाव ${ASSISTANT_NAME} आहे. सांग, मी तुला कशी मदत करू?`;
-        } else if (lang === "hi-roman") {
-          response =
-            `Mera naam ${ASSISTANT_NAME} hai. Batao, main aapki kya madad karoon?`;
-        } else {
-          response =
-            `My name is ${ASSISTANT_NAME}. How can I help you today?`;
-        }
-
-        saveAndSend(text, response, lang, ws);
-        return;
-      }
-
-      // Greetings
-      if (/^(hello|hi|hey|namaste|namaskar|नमस्कार)\b/i.test(cleanText)) {
-        let response;
-
-        if (lang === "mr") {
-          response = "नमस्कार! मी तुम्हाला कशी मदत करू शकते?";
-        } else if (lang === "hi-roman") {
-          response = "Namaste! Main aapki kya madad kar sakti hoon?";
-        } else {
-          response = "Hello! How can I help you today?";
-        }
-
-        saveAndSend(text, response, lang, ws);
-        return;
-      }
-
-      // ================= GROQ =================
-
-      const rule = LANG_RULES[lang] || LANG_RULES.en;
-
-      const completion = await groq.chat.completions.create({
-        model: "llama-3.3-70b-versatile",
-
+      const result = await groq.chat.completions.create({
+        model: MODEL,
         messages: [
           {
             role: "system",
             content: `
-You are ${ASSISTANT_NAME}, a friendly Indian female voice assistant.
+You are SIRI, a friendly Indian female voice assistant.
 
-Target language: ${rule.name}
+Reply naturally and conversationally.
+Keep replies short.
+Use the same language as the user.
 
-${rule.script}
+For Marathi, use proper Marathi Devanagari.
+For Hindi, use proper Hindi Devanagari.
+For English, use natural Indian English.
 
-IMPORTANT VOICE RULES:
-
-Speak like a real person having a friendly conversation.
-
-Do not sound like a textbook or robot.
-
-Write sentences that are easy and natural to speak aloud.
-
-Keep answers short, usually 1 to 3 sentences.
-
-Use simple everyday words.
-
-Use commas and full stops naturally so the voice has pauses.
-
-Do not use markdown.
-
-Do not use bullet points.
-
-Do not use headings.
-
-Do not use emojis.
-
-Do not repeat the question.
-
-Do not give unnecessarily long explanations.
-
-Sound warm, friendly and conversational.
+Never answer in a different language.
+Do not use markdown, bullets or symbols.
 `
           },
           {
@@ -218,53 +94,66 @@ Sound warm, friendly and conversational.
             content: text
           }
         ],
-
-        temperature: 0.8,
-        max_tokens: 180
+        temperature: 0.7,
+        max_tokens: 150
       });
 
       const answer =
-        completion.choices[0]?.message?.content?.trim();
+        result.choices?.[0]?.message?.content?.trim() ||
+        "Sorry, I could not understand that.";
 
-      if (!answer) {
-        throw new Error("No response received from Groq.");
-      }
+      const audio = await generateVoice(answer, language);
 
-      saveAndSend(text, answer, lang, ws);
-
-    } catch (err) {
-      console.error("Groq API Error:", err.message);
-
-      ws.send(
-        JSON.stringify({
-          type: "ERROR",
-          message: err.message
-        })
+      db.run(
+        `INSERT INTO interactions (user_query, agent_response)
+         VALUES (?, ?)`,
+        [text, answer]
       );
+
+      ws.send(JSON.stringify({
+        type: "AGENT_RESPONSE",
+        text: answer,
+        language,
+        audio,
+        audioType: "audio/wav"
+      }));
+
+    } catch (error) {
+      console.error(error);
+
+      ws.send(JSON.stringify({
+        type: "ERROR",
+        message: error.message || "Something went wrong"
+      }));
     }
   });
 });
 
-// ================= SAVE + SEND =================
+app.get("/api/history", (req, res) => {
+  db.all(
+    "SELECT * FROM interactions ORDER BY id DESC",
+    [],
+    (err, rows) => {
+      if (err)
+        return res.status(500).json({ error: err.message });
 
-function saveAndSend(userText, response, language, ws) {
-  db.run(
-    "INSERT INTO interactions (user_prompt, agent_response) VALUES (?, ?)",
-    [userText, response]
+      res.json(rows);
+    }
   );
+});
 
-  ws.send(
-    JSON.stringify({
-      type: "AGENT_RESPONSE",
-      text: response,
-      language
-    })
-  );
-}
+app.delete("/api/history", (req, res) => {
+  db.run("DELETE FROM interactions", [], err => {
+    if (err)
+      return res.status(500).json({ error: err.message });
 
-// ================= SERVER =================
+    res.json({ success: true });
+  });
+});
 
 server.listen(PORT, () => {
-  console.log(`Server running on http://localhost:${PORT}`);
-  console.log(`Assistant: ${ASSISTANT_NAME}`);
+  console.log(`Server running: http://localhost:${PORT}`);
+  console.log("Agent: SIRI");
+  console.log("Groq Model:", MODEL);
+  console.log("Sarvam TTS: Bulbul v3");
 });

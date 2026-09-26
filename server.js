@@ -82,7 +82,7 @@ wss.on("connection", ws => {
       const lang = detectLanguage(text);
       const cleanText = text.toLowerCase().replace(/[^\w\s\u0900-\u097f]/g, "").trim();
 
-      // 1. Direct Intercept for Language Request
+      // 1. Language Request Intercept
       if (/\b(marathi madhe bol|marathi bol|speak in marathi)\b/i.test(cleanText)) {
         const marathiResponse = "हो नक्कीच! मी आता तुमच्याशी मराठीत बोलेन. सांगा, मी तुम्हाला कशी मदत करू?";
         db.run("INSERT INTO interactions (user_prompt, agent_response) VALUES (?, ?)", [text, marathiResponse]);
@@ -90,7 +90,7 @@ wss.on("connection", ws => {
         return;
       }
 
-      // 2. Direct Intercept for Identity / Name Questions
+      // 2. Identity Request Intercept
       if (
         (/\b(nav|naav|naam|name|नाव)\b/i.test(cleanText) && /\b(kay|kaay|kya|what|kon|who|काय)\b/i.test(cleanText)) ||
         /\b(tu kon aahes|tu kon ahes|who are you|tumhara naam kya hai|तू कोण आहेस)\b/i.test(cleanText)
@@ -105,7 +105,7 @@ wss.on("connection", ws => {
         return;
       }
 
-      // 3. Direct Intercept ONLY for explicit greetings (Hello / Hi)
+      // 3. Direct Greeting Intercept
       if (/^(hello|hi|hey|namaste|namaskar|नमस्कार)\b/i.test(cleanText)) {
         let greetingResponse = "नमस्कार! मी तुला कशी मदत करू शकते?";
         if (lang === "hi") greetingResponse = "नमस्ते! मैं आपकी क्या मदद कर सकती हूँ?";
@@ -117,7 +117,7 @@ wss.on("connection", ws => {
         return;
       }
 
-      // 4. Groq Model Cascade with Active Supported Models
+      // 4. Model Fallback Engine using Active Groq Models
       const rule = LANG_RULES[lang] || LANG_RULES.en;
       const messagesPayload = [
         {
@@ -125,14 +125,13 @@ wss.on("connection", ws => {
           content: `Your name is ${ASSISTANT_NAME}. You are a female AI assistant.
 Target Language: ${rule.name}.
 Rule: ${rule.script}
-STRICT RULE: Never output greetings like "Good afternoon" or "Good morning" unless explicitly requested by the user.
+STRICT RULE: Do NOT output time greetings like "Good afternoon" unless the user explicitly asks.
 Grammar Rule: ALWAYS use female self-referencing verbs (e.g., in Marathi use 'मी करू शकते', 'मी सांगेन', 'माझे नाव आर्या आहे').
-Keep answers short and direct (1-2 sentences).`
+Keep answers short, clear, and direct (1-2 sentences).`
         },
         { role: "user", content: text }
       ];
 
-      // Active Groq Supported Models List
       const candidateModels = [
         "llama-3.3-70b-versatile",
         "llama-3.1-8b-instant",
@@ -153,13 +152,13 @@ Keep answers short and direct (1-2 sentences).`
           answer = completion.choices[0]?.message?.content?.trim();
           if (answer) break;
         } catch (err) {
-          console.warn(`Model ${model} failed: ${err.message}`);
+          console.warn(`Groq Model ${model} failed: ${err.message}`);
           lastError = err;
         }
       }
 
       if (!answer) {
-        throw new Error(lastError ? lastError.message : "All Groq models failed.");
+        throw new Error(lastError ? lastError.message : "All Groq model calls failed.");
       }
 
       db.run("INSERT INTO interactions (user_prompt, agent_response) VALUES (?, ?)", [text, answer]);

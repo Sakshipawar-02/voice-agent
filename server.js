@@ -26,7 +26,7 @@ app.use(express.static(path.join(__dirname, "public")));
 const LANG_RULES = {
   mr: { 
     name: "Marathi (Devanagari)", 
-    script: "Reply STRICTLY in simple, conversational Devanagari Marathi (Pune style). Do NOT use bullet points, bold text, or long sentences." 
+    script: "Reply STRICTLY in natural, simple Devanagari Marathi (Pune style). Avoid heavy trailing conjuncts like 'नक्कीच'—use lighter words like 'नक्की'. Keep responses clean and conversational without bullet points." 
   },
   hi: { 
     name: "Hindi (Devanagari)", 
@@ -82,15 +82,15 @@ wss.on("connection", ws => {
       const lang = detectLanguage(text);
       const cleanText = text.toLowerCase().replace(/[^\w\s\u0900-\u097f]/g, "").trim();
 
-      // 1. Direct Intercept for Language Request
+      // 1. Direct Intercept for Language Switch
       if (/\b(marathi madhe bol|marathi madhe bola|marathi bol|marathi bola|speak in marathi)\b/i.test(cleanText)) {
-        const marathiResponse = "हो नक्कीच! मी आता तुमच्याशी मराठीत बोलेन. सांगा, मी तुम्हाला कशी मदत करू?";
+        const marathiResponse = "हो, नक्की! मी आता तुमच्याशी मराठीत बोलेन. सांगा, मी तुम्हाला कशी मदत करू?";
         db.run("INSERT INTO interactions (user_prompt, agent_response) VALUES (?, ?)", [text, marathiResponse]);
         ws.send(JSON.stringify({ type: "AGENT_RESPONSE", text: marathiResponse, language: "mr" }));
         return;
       }
 
-      // 2. Direct Intercept for Name / Identity Questions
+      // 2. Direct Intercept for Identity / Name
       if (
         (/\b(nav|naav|naam|name|नाव)\b/i.test(cleanText) && /\b(kay|kaay|kya|what|kon|who|काय)\b/i.test(cleanText)) ||
         /\b(tu kon aahes|tu kon ahes|who are you|tumhara naam kya hai|तू कोण आहेस)\b/i.test(cleanText)
@@ -117,18 +117,18 @@ wss.on("connection", ws => {
         return;
       }
 
-      // 4. Groq Call - Single, Active Production Model strictly specified
+      // 4. Groq Dynamic Call
       const rule = LANG_RULES[lang] || LANG_RULES.en;
       
       const completion = await groq.chat.completions.create({
         messages: [
           {
             role: "system",
-            content: `Your name is ${ASSISTANT_NAME}. You are an Indian female voice assistant. Target Language: ${rule.name}. Rule: ${rule.script} Keep sentences short and conversational without formatting.`
+            content: `Your name is ${ASSISTANT_NAME}. You are an Indian female voice assistant. Target Language: ${rule.name}. Rule: ${rule.script} Keep responses short, concise, and easy to speak aloud.`
           },
           { role: "user", content: text }
         ],
-        model: "llama-3.3-70b-versatile",
+        model: "openai/gpt-oss-120b",
         temperature: 0.7,
         max_tokens: 300,
       });
@@ -149,4 +149,4 @@ wss.on("connection", ws => {
   });
 });
 
-server.listen(PORT, () => console.log(`Server running on http://localhost:${PORT}`));
+server.listen(PORT, () => console.log(`Server running on port ${PORT}`));

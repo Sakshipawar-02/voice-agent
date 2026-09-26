@@ -82,7 +82,7 @@ wss.on("connection", ws => {
       const lang = detectLanguage(text);
       const cleanText = text.toLowerCase().replace(/[^\w\s\u0900-\u097f]/g, "").trim();
 
-      // Direct Intercept for Language Change Request
+      // 1. Direct Intercept for Language Request
       if (/\b(marathi madhe bol|marathi bol|speak in marathi)\b/i.test(cleanText)) {
         const marathiResponse = "हो नक्कीच! मी आता तुमच्याशी मराठीत बोलेन. सांगा, मी तुम्हाला कशी मदत करू?";
         db.run("INSERT INTO interactions (user_prompt, agent_response) VALUES (?, ?)", [text, marathiResponse]);
@@ -90,19 +90,7 @@ wss.on("connection", ws => {
         return;
       }
 
-      // Direct Intercept for Greetings (ONLY reply with time-based greetings if explicitly requested)
-      if (/^(good morning|good afternoon|good evening|say good afternoon)\b/i.test(cleanText)) {
-        let greetingResponse = "शुभ दुपार! मी तुला कशी मदत करू शकते?";
-        if (lang === "hi") greetingResponse = "शुभ दोपहर! मैं आपकी क्या मदद कर सकती हूँ?";
-        else if (lang === "hi-roman") greetingResponse = "Shubh dopahar! Main aapki kya madad kar sakti hoon?";
-        else if (lang === "en") greetingResponse = "Good afternoon! How can I help you today?";
-
-        db.run("INSERT INTO interactions (user_prompt, agent_response) VALUES (?, ?)", [text, greetingResponse]);
-        ws.send(JSON.stringify({ type: "AGENT_RESPONSE", text: greetingResponse, language: lang }));
-        return;
-      }
-
-      // Direct Intercept for Identity / Name Questions
+      // 2. Direct Intercept for Identity / Name Questions
       if (
         (/\b(nav|naav|naam|name|नाव)\b/i.test(cleanText) && /\b(kay|kaay|kya|what|kon|who|काय)\b/i.test(cleanText)) ||
         /\b(tu kon aahes|tu kon ahes|who are you|tumhara naam kya hai|तू कोण आहेस)\b/i.test(cleanText)
@@ -117,7 +105,19 @@ wss.on("connection", ws => {
         return;
       }
 
-      // Groq Model Cascade Execution with Active Fallback Models
+      // 3. Direct Intercept ONLY for explicit greetings (Hello / Hi)
+      if (/^(hello|hi|hey|namaste|namaskar|नमस्कार)\b/i.test(cleanText)) {
+        let greetingResponse = "नमस्कार! मी तुला कशी मदत करू शकते?";
+        if (lang === "hi") greetingResponse = "नमस्ते! मैं आपकी क्या मदद कर सकती हूँ?";
+        else if (lang === "hi-roman") greetingResponse = "Namaste! Main aapki kya madad kar sakti hoon?";
+        else if (lang === "en") greetingResponse = "Hello! How can I help you today?";
+
+        db.run("INSERT INTO interactions (user_prompt, agent_response) VALUES (?, ?)", [text, greetingResponse]);
+        ws.send(JSON.stringify({ type: "AGENT_RESPONSE", text: greetingResponse, language: lang }));
+        return;
+      }
+
+      // 4. Groq Model Cascade with Active Supported Models
       const rule = LANG_RULES[lang] || LANG_RULES.en;
       const messagesPayload = [
         {
@@ -125,17 +125,18 @@ wss.on("connection", ws => {
           content: `Your name is ${ASSISTANT_NAME}. You are a female AI assistant.
 Target Language: ${rule.name}.
 Rule: ${rule.script}
-CRITICAL INSTRUCTION: Do NOT include greetings like "Good afternoon", "Good morning", or "Namaste" unless the user explicitly asks for a greeting.
+STRICT RULE: Never output greetings like "Good afternoon" or "Good morning" unless explicitly requested by the user.
 Grammar Rule: ALWAYS use female self-referencing verbs (e.g., in Marathi use 'मी करू शकते', 'मी सांगेन', 'माझे नाव आर्या आहे').
-Keep answers short, clear, and direct (1-2 sentences).`
+Keep answers short and direct (1-2 sentences).`
         },
         { role: "user", content: text }
       ];
 
+      // Active Groq Supported Models List
       const candidateModels = [
         "llama-3.3-70b-versatile",
-        "mixtral-8x7b-32768",
-        "gemma2-9b-it"
+        "llama-3.1-8b-instant",
+        "mixtral-8x7b-32768"
       ];
 
       let answer = null;
@@ -152,13 +153,13 @@ Keep answers short, clear, and direct (1-2 sentences).`
           answer = completion.choices[0]?.message?.content?.trim();
           if (answer) break;
         } catch (err) {
-          console.warn(`Model ${model} failed: ${err.message}. Trying fallback...`);
+          console.warn(`Model ${model} failed: ${err.message}`);
           lastError = err;
         }
       }
 
       if (!answer) {
-        throw new Error(lastError ? lastError.message : "Failed to retrieve response from active Groq models.");
+        throw new Error(lastError ? lastError.message : "All Groq models failed.");
       }
 
       db.run("INSERT INTO interactions (user_prompt, agent_response) VALUES (?, ?)", [text, answer]);

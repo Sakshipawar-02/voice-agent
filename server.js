@@ -27,7 +27,7 @@ app.use(express.static(path.join(__dirname, "public")));
 const LANG_RULES = {
   mr: { 
     name: "Marathi (Devanagari)", 
-    script: "Reply STRICTLY in authentic Devanagari Marathi (Pune dialect). Do NOT use English letters. Example: 'यश नावावरून ५ मुलांची नावे: १. यशवर्धन २. यशराज...'" 
+    script: "Reply STRICTLY in authentic Devanagari Marathi (Pune dialect). Do NOT use English letters." 
   },
   hi: { 
     name: "Hindi (Devanagari)", 
@@ -102,27 +102,19 @@ wss.on("connection", ws => {
         return;
       }
 
-      // 2. Direct Intercept for Pure Language Switch Triggers ONLY
-      if (/^(marathi|marathi madhe bol|marathit bol|marathi bol|मराठी|मराठीत बोल)$/i.test(cleanText)) {
-        const marathiResponse = "हो, नक्की! मी मराठीत बोलू शकते. सांग, मी तुला कशी मदत करू?";
-        db.run("INSERT INTO interactions (user_prompt, agent_response) VALUES (?, ?)", [text, marathiResponse]);
-        ws.send(JSON.stringify({ type: "AGENT_RESPONSE", text: marathiResponse, language: "mr" }));
-        return;
-      }
-
-      // 3. Direct Intercept for Greetings
-      if (/^(hello|hi|hey|namaste|namaskar|नमस्कार|good morning|good afternoon|good evening)$/i.test(cleanText)) {
-        let greetingResponse = "नमस्कार! मी तुला कशी मदत करू शकते?";
-        if (lang === "hi") greetingResponse = "नमस्ते! मैं आपकी क्या मदद कर सकती हूँ?";
-        else if (lang === "hi-roman") greetingResponse = "Namaste! Main aapki kya madad kar sakti hoon?";
-        else if (lang === "en") greetingResponse = "Hello! How can I help you today?";
+      // 2. Direct Intercept for Greetings
+      if (/^(hello|hi|hey|namaste|namaskar|नमस्कार|good morning|good afternoon|good evening|say good afternoon)\b/i.test(cleanText)) {
+        let greetingResponse = "शुभ दुपार! मी तुला कशी मदत करू शकते?";
+        if (lang === "hi") greetingResponse = "शुभ दोपहर! मैं आपकी क्या मदद कर सकती हूँ?";
+        else if (lang === "hi-roman") greetingResponse = "Shubh dopahar! Main aapki kya madad kar sakti hoon?";
+        else if (lang === "en") greetingResponse = "Good afternoon! How can I help you today?";
 
         db.run("INSERT INTO interactions (user_prompt, agent_response) VALUES (?, ?)", [text, greetingResponse]);
         ws.send(JSON.stringify({ type: "AGENT_RESPONSE", text: greetingResponse, language: lang }));
         return;
       }
 
-      // 4. Groq API Call with Valid Model Fallback and Strict Female Grammar System Prompt
+      // 3. Groq API Call with Active Supported Models
       const rule = LANG_RULES[lang] || LANG_RULES.en;
       const messagesPayload = [
         {
@@ -140,15 +132,15 @@ Keep answers under 1-2 short direct sentences. Do not add filler greetings like 
       try {
         completion = await groq.chat.completions.create({
           messages: messagesPayload,
-          model: "llama-3.1-8b-instant",
+          model: "llama-3.3-70b-versatile",
           temperature: 0.7,
           max_tokens: 300,
         });
       } catch (modelErr) {
-        console.warn("Primary model failed, trying fallback model llama3-70b-8192:", modelErr.message);
+        console.warn("Primary model failed, switching to llama-3.1-8b-instant:", modelErr.message);
         completion = await groq.chat.completions.create({
           messages: messagesPayload,
-          model: "llama3-70b-8192",
+          model: "llama-3.1-8b-instant",
           temperature: 0.7,
           max_tokens: 300,
         });

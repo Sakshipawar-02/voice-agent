@@ -1,102 +1,133 @@
 import express from 'express';
-import http from 'http';
-import { WebSocketServer, WebSocket } from 'ws';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
 import multer from 'multer';
+import Groq, { toFile } from 'groq-sdk';
 import { initDB, saveConversation, getConversations } from './database.js';
 
 dotenv.config();
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-
 const app = express();
-const server = http.createServer(app);
-const wss = new WebSocketServer({ server });
-const upload = multer({ dest: 'uploads/' });
+const port = Number(process.env.PORT) || 3000;
+const groq = process.env.GROQ_API_KEY && !process.env.GROQ_API_KEY.includes('your_actual')
+  ? new Groq({ apiKey: process.env.GROQ_API_KEY })
+  : null;
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 20 * 1024 * 1024 }
+});
+const requestWindows = new Map();
 
-// Middleware
-app.use(express.json());
+app.use(express.json({ limit: '32kb' }));
 app.use(express.static(path.join(__dirname, 'public')));
-
-// Initialize SQLite Database
 initDB();
 
-// REST API Endpoints
 app.get('/api/health', (req, res) => {
-  res.json({ status: 'ok', service: 'voice-agent', timestamp: new Date().toISOString() });
+  res.json({ status: 'ok', service: 'voice-agent', aiConfigured: Boolean(groq) });
 });
 
 app.get('/api/history', async (req, res) => {
   try {
-    const logs = await getConversations();
-    res.json({ success: true, logs });
-  } catch (err) {
-    res.status(500).json({ success: false, error: err.message });
+    res.json({ success: true, logs: await getConversations() });
+  } catch (error) {
+    console.error('[DB] Could not load conversation history:', error);
+    res.status(500).json({ success: false, error: 'Could not load conversation history.' });
   }
 });
 
-app.post('/api/audio-upload', upload.single('audio'), (req, res) => {
+function limitVoiceRequests(req, res, next) {
+  const now = Date.now();
+  const key = req.ip;
+  const window = requestWindows.get(key);
+  if (!window || now - window.startedAt >= 60_000) {
+    requestWindows.set(key, { startedAt: now, count: 1 });
+    return next();
+  }
+  if (window.count >= 10) {
+    return res.status(429).json({ error: 'Too many voice messages. Wait a minute and try again.' });
+  }
+  window.count += 1;
+  next();
+}
+
+// One recorded utterance is transcribed by Groq Whisper, then answered by a chat model.
+app.post('/api/voice-chat', limitVoiceRequests, upload.single('audio'), async (req, res) => {
+  if (!groq) {
+    return res.status(503).json({ error: 'The server is missing its GROQ_API_KEY environment variable.' });
+  }
   if (!req.file) {
-    return res.status(400).json({ error: 'No audio file uploaded' });
+    return res.status(400).json({ error: 'Record a message before sending it.' });
   }
-  res.json({
-    message: 'Audio received successfully',
-    filename: req.file.filename,
-    size: req.file.size
-  });
-});
 
-// WebSocket Handler for Real-Time Bidirectional Voice/Audio
-wss.on('connection', (ws) => {
-  console.log('[WS] Client connected');
-
-  ws.on('message', async (message) => {
-    try {
-      // 1. Handle JSON Control Messages (e.g. metadata or config)
-      if (typeof message === 'string' || (Buffer.isBuffer(message) && message.toString().trim().startsWith('{'))) {
-        const payload = JSON.parse(message.toString());
-        console.log('[WS] Received control signal:', payload);
-
-        if (payload.type === 'ping') {
-          ws.send(JSON.stringify({ type: 'pong' }));
-        } else if (payload.type === 'start') {
-          ws.send(JSON.stringify({ type: 'status', message: 'Voice stream active' }));
-        }
-        return;
-      }
-
-      // 2. Handle Binary PCM Audio Streaming Chunks
-      if (Buffer.isBuffer(message)) {
-        // Echo back audio acknowledge or process chunk
-        // Here you pass the binary buffer to Sarvam AI, Groq, or Gemini WebSocket pipelines
-        ws.send(JSON.stringify({
-          type: 'audio_ack',
-          bytesReceived: message.length
-        }));
-      }
-
-    } catch (err) {
-      console.error('[WS] Error parsing websocket message:', err.message);
-      ws.send(JSON.stringify({ type: 'error', message: err.message }));
+  try {
+    const audioFile = await toFile(req.file.buffer, req.file.originalname || 'voice.webm', {
+      type: req.file.mimetype || 'audio/webm'
+    });
+    const transcription = await groq.audio.transcriptions.create({
+      file: audioFile,
+      model: process.env.GROQ_STT_MODEL || 'whisper-large-v3-turbo',
+      response_format: 'json'
+    });
+    const userText = transcription.text?.trim();
+    if (!userText) {
+      return res.status(422).json({ error: 'I could not hear any speech. Try again closer to the microphone.' });
     }
-  });
 
-  ws.on('close', () => {
-    console.log('[WS] Client disconnected');
-  });
+    let history = [];
+    try {
+      const parsed = JSON.parse(req.body.history || '[]');
+      if (Array.isArray(parsed)) {
+        history = parsed
+          .filter((item) => ['user', 'assistant'].includes(item?.role) && typeof item.content === 'string')
+          .slice(-10)
+          .map(({ role, content }) => ({ role, content: content.slice(0, 2000) }));
+      }
+    } catch {
+      // Ignore malformed optional history and answer this utterance as a new conversation.
+    }
 
-  ws.on('error', (err) => {
-    console.error('[WS] Socket error:', err);
-  });
+    const completion = await groq.chat.completions.create({
+      model: process.env.GROQ_CHAT_MODEL || 'openai/gpt-oss-20b',
+      messages: [
+        { role: 'system', content: 'You are a friendly, concise voice assistant. Reply naturally and keep spoken answers brief.' },
+        ...history,
+        { role: 'user', content: userText }
+      ],
+      max_tokens: 300,
+      temperature: 0.6
+    });
+    const reply = completion.choices[0]?.message?.content?.trim();
+    if (!reply) throw new Error('Groq returned an empty response.');
+
+    try {
+      await saveConversation(userText, reply);
+    } catch (error) {
+      // Conversation still succeeds if persistence is temporarily unavailable.
+      console.error('[DB] Could not save conversation:', error);
+    }
+    res.json({ transcript: userText, reply });
+  } catch (error) {
+    console.error('[Groq] Voice request failed:', error);
+    const status = error.status === 401 ? 503 : 502;
+    const message = error.status === 401
+      ? 'Groq rejected the API key. Check GROQ_API_KEY in your server environment.'
+      : 'Groq could not process that message. Check the server logs and try again.';
+    res.status(status).json({ error: message });
+  }
 });
 
-const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => {
-  console.log(`========================================`);
-  console.log(`Voice Agent Server running on port ${PORT}`);
-  console.log(`Web App: http://localhost:${PORT}`);
-  console.log(`========================================`);
+app.use((error, req, res, next) => {
+  if (error instanceof multer.MulterError && error.code === 'LIMIT_FILE_SIZE') {
+    return res.status(413).json({ error: 'That recording is too large. Keep each message under 20 MB.' });
+  }
+  console.error('[Server] Request failed:', error);
+  res.status(400).json({ error: 'The request could not be processed.' });
+});
+
+app.listen(port, () => {
+  console.log(`Voice Agent server listening on port ${port}`);
+  if (!groq) console.warn('GROQ_API_KEY is not configured. Add it to the server environment to enable voice chat.');
 });

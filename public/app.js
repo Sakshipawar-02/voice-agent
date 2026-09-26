@@ -1,12 +1,15 @@
-let socket = null;
-let audioContext = null;
-let mediaStream = null;
-let scriptProcessor = null;
-
 const startBtn = document.getElementById('startBtn');
+const sendBtn = document.getElementById('sendBtn');
 const stopBtn = document.getElementById('stopBtn');
 const statusBadge = document.getElementById('statusBadge');
 const transcriptBox = document.getElementById('transcriptBox');
+
+let mediaStream = null;
+let recorder = null;
+let audioChunks = [];
+let history = [];
+let requestInProgress = false;
+let assistantSpeaking = false;
 
 function setStatus(text, state = 'normal') {
   statusBadge.textContent = text;
@@ -15,125 +18,148 @@ function setStatus(text, state = 'normal') {
   if (state === 'error') statusBadge.classList.add('error');
 }
 
-function appendLog(text) {
+function appendLog(label, text) {
   const line = document.createElement('div');
-  line.style.marginBottom = '0.5rem';
-  line.textContent = `[${new Date().toLocaleTimeString()}] ${text}`;
+  line.style.marginBottom = '0.75rem';
+  const heading = document.createElement('strong');
+  heading.textContent = `${label}: `;
+  line.append(heading, document.createTextNode(text));
   transcriptBox.appendChild(line);
   transcriptBox.scrollTop = transcriptBox.scrollHeight;
 }
 
+function supportedAudioType() {
+  if (!window.MediaRecorder) return '';
+  return ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/ogg;codecs=opus']
+    .find((type) => MediaRecorder.isTypeSupported(type)) || '';
+}
+
+function beginRecording() {
+  if (!mediaStream || requestInProgress) return;
+  const mimeType = supportedAudioType();
+  if (!mimeType) {
+    setStatus('Recording unsupported', 'error');
+    appendLog('Error', 'This browser cannot record audio in a format supported by the voice service. Try current Chrome or Edge.');
+    return;
+  }
+
+  audioChunks = [];
+  recorder = new MediaRecorder(mediaStream, { mimeType });
+  recorder.addEventListener('dataavailable', (event) => {
+    if (event.data.size) audioChunks.push(event.data);
+  });
+  recorder.start();
+  setStatus('Listening…', 'active');
+  sendBtn.disabled = false;
+}
+
 startBtn.addEventListener('click', async () => {
+  startBtn.disabled = true;
+  setStatus('Requesting microphone…');
+  transcriptBox.replaceChildren();
+  history = [];
+
   try {
-    startBtn.disabled = true;
-    setStatus('Connecting...');
-    transcriptBox.innerHTML = '';
-    appendLog('Initializing session...');
-
-    // 1. Initialize AudioContext directly inside user click handler
-    audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
-    if (audioContext.state === 'suspended') {
-      await audioContext.resume();
+    const healthResponse = await fetch('/api/health');
+    const health = await healthResponse.json();
+    if (!health.aiConfigured) {
+      throw new Error('GROQ_API_KEY is missing from the deployed server environment. Add it there, then restart or redeploy.');
     }
-
-    // 2. Request microphone access
+    if (!navigator.mediaDevices?.getUserMedia) {
+      throw new Error('Microphone access needs HTTPS (or localhost) and a supported browser.');
+    }
+    if (!supportedAudioType()) {
+      throw new Error('Audio recording is not supported by this browser. Try current Chrome or Edge.');
+    }
     mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
-    appendLog('Microphone access granted.');
-
-    // 3. Resolve dynamic WebSocket path (works on localhost and production HTTPS/WSS)
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = `${protocol}//${window.location.host}`;
-    
-    socket = new WebSocket(wsUrl);
-
-    socket.onopen = () => {
-      setStatus('Connected & Streaming', 'active');
-      stopBtn.disabled = false;
-      appendLog('WebSocket connected. Streaming audio...');
-
-      // Send start control signal
-      socket.send(JSON.stringify({ type: 'start' }));
-
-      // 4. Hook up audio node processing
-      const source = audioContext.createMediaStreamSource(mediaStream);
-      scriptProcessor = audioContext.createScriptProcessor(4096, 1, 1);
-
-      source.connect(scriptProcessor);
-      scriptProcessor.connect(audioContext.destination);
-
-      scriptProcessor.onaudioprocess = (e) => {
-        if (!socket || socket.readyState !== WebSocket.OPEN) return;
-
-        const inputBuffer = e.inputBuffer.getChannelData(0);
-        // Convert Float32 to 16-bit PCM Int16Array
-        const pcmBuffer = new Int16Array(inputBuffer.length);
-        for (let i = 0; i < inputBuffer.length; i++) {
-          pcmBuffer[i] = Math.max(-1, Math.min(1, inputBuffer[i])) * 0x7fff;
-        }
-
-        socket.send(pcmBuffer.buffer);
-      };
-    };
-
-    socket.onmessage = (event) => {
-      try {
-        const data = JSON.parse(event.data);
-        if (data.type === 'status') {
-          appendLog(data.message);
-        } else if (data.text) {
-          appendLog(`AI: ${data.text}`);
-        }
-      } catch (e) {
-        console.log('Raw message received:', event.data);
-      }
-    };
-
-    socket.onerror = (err) => {
-      console.error('WebSocket Error:', err);
-      setStatus('Connection Error', 'error');
-      appendLog('WebSocket encountered an error.');
-      stopSession();
-    };
-
-    socket.onclose = () => {
-      setStatus('Disconnected');
-      appendLog('WebSocket connection closed.');
-      stopSession();
-    };
-
-  } catch (err) {
-    console.error('Error starting voice agent:', err);
-    setStatus('Mic Access Denied / Error', 'error');
-    appendLog(`Error: ${err.message}`);
+    sendBtn.disabled = false;
+    stopBtn.disabled = false;
+    appendLog('Ready', 'Speak, then choose Send to AI.');
+    beginRecording();
+  } catch (error) {
+    console.error('Could not start microphone:', error);
+    const message = error.name === 'NotAllowedError'
+      ? 'Allow microphone access in your browser, then try again.'
+      : error.name === 'NotFoundError'
+        ? 'No microphone was found. Connect one, then try again.'
+        : error.message || 'Could not start microphone.';
+    setStatus('Unable to start', 'error');
+    appendLog('Error', message);
     startBtn.disabled = false;
   }
 });
 
-stopBtn.addEventListener('click', () => {
-  stopSession();
+sendBtn.addEventListener('click', async () => {
+  if (!recorder || recorder.state !== 'recording' || requestInProgress) return;
+
+  requestInProgress = true;
+  sendBtn.disabled = true;
+  setStatus('Preparing audio…');
+  await new Promise((resolve) => {
+    recorder.addEventListener('stop', resolve, { once: true });
+    recorder.stop();
+  });
+
+  const blob = new Blob(audioChunks, { type: recorder.mimeType });
+  const extension = blob.type.includes('mp4') ? 'm4a' : blob.type.includes('ogg') ? 'ogg' : 'webm';
+  if (!blob.size) {
+    requestInProgress = false;
+    appendLog('Error', 'No audio was recorded. Try speaking again.');
+    beginRecording();
+    return;
+  }
+
+  setStatus('Transcribing and thinking…');
+  appendLog('You', 'Processing your message…');
+  const form = new FormData();
+  form.append('audio', blob, `voice.${extension}`);
+  form.append('history', JSON.stringify(history));
+
+  try {
+    const response = await fetch('/api/voice-chat', { method: 'POST', body: form });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || `Request failed (${response.status}).`);
+
+    // Replace the temporary processing line with the actual transcription.
+    transcriptBox.lastElementChild?.remove();
+    appendLog('You', result.transcript);
+    appendLog('AI', result.reply);
+    history.push({ role: 'user', content: result.transcript }, { role: 'assistant', content: result.reply });
+    history = history.slice(-10);
+    if ('speechSynthesis' in window) {
+      window.speechSynthesis.cancel();
+      assistantSpeaking = true;
+      setStatus('Speaking response…', 'active');
+      const utterance = new SpeechSynthesisUtterance(result.reply);
+      utterance.onend = utterance.onerror = () => {
+        assistantSpeaking = false;
+        if (mediaStream?.active && !requestInProgress) beginRecording();
+      };
+      window.speechSynthesis.speak(utterance);
+    }
+    if (!assistantSpeaking) setStatus('Listening…', 'active');
+  } catch (error) {
+    console.error('Voice request failed:', error);
+    setStatus('Request failed', 'error');
+    appendLog('Error', error.message);
+  } finally {
+    requestInProgress = false;
+    if (mediaStream?.active && !assistantSpeaking) beginRecording();
+    else startBtn.disabled = false;
+  }
 });
 
-function stopSession() {
-  if (scriptProcessor) {
-    scriptProcessor.disconnect();
-    scriptProcessor = null;
-  }
+stopBtn.addEventListener('click', () => {
+  if (recorder?.state === 'recording') recorder.stop();
   if (mediaStream) {
     mediaStream.getTracks().forEach((track) => track.stop());
     mediaStream = null;
   }
-  if (audioContext) {
-    audioContext.close();
-    audioContext = null;
-  }
-  if (socket) {
-    if (socket.readyState === WebSocket.OPEN) {
-      socket.close();
-    }
-    socket = null;
-  }
-
-  startBtn.disabled = false;
+  if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+  recorder = null;
+  audioChunks = [];
+  sendBtn.disabled = true;
   stopBtn.disabled = true;
+  startBtn.disabled = requestInProgress;
   setStatus('Disconnected');
-}
+});

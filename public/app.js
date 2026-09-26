@@ -2,9 +2,9 @@ const toggleAgentBtn = document.getElementById('toggleAgentBtn');
 const statusBadge = document.getElementById('statusBadge');
 const transcriptBox = document.getElementById('transcriptBox');
 
-const silenceAfterSpeechMs = 1200;
-const minimumSpeechMs = 450;
-const speechRmsThreshold = 0.01;
+const silenceAfterSpeechMs = 1400;
+const minimumSpeechMs = 700;
+const speechRmsThreshold = 0.022;
 
 let sessionActive = false;
 let starting = false;

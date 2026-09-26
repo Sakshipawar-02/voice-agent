@@ -95,11 +95,18 @@ app.post('/api/voice-chat', limitVoiceRequests, upload.single('audio'), async (r
     const transcription = await groq.audio.transcriptions.create({
       file: audioFile,
       model: process.env.GROQ_STT_MODEL || 'whisper-large-v3-turbo',
-      response_format: 'json'
+      response_format: 'verbose_json',
+      temperature: 0
     });
     const userText = transcription.text?.trim();
     if (!userText) {
       return res.status(422).json({ error: 'I could not hear any speech. Try again closer to the microphone.' });
+    }
+    const segments = Array.isArray(transcription.segments) ? transcription.segments : [];
+    if (segments.length && segments.every((segment) => (
+      Number(segment.no_speech_prob) >= 0.55 || Number(segment.avg_logprob) < -1.2
+    ))) {
+      return res.status(422).json({ error: 'I heard background noise, not clear speech. Please speak after starting the agent.' });
     }
 
     let history = [];

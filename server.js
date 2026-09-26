@@ -17,7 +17,7 @@ const server = http.createServer(app);
 const wss = new WebSocketServer({ server });
 
 const PORT = process.env.PORT || 3000;
-const ASSISTANT_NAME = "Siri";
+const ASSISTANT_NAME = "Aarya";
 
 // Initialize Groq client with API Key from .env
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
@@ -123,24 +123,36 @@ wss.on("connection", ws => {
         return;
       }
 
-      // 4. Groq API Call replacing local Ollama
+      // 4. Groq API Call with Model Fallback
       const rule = LANG_RULES[lang] || LANG_RULES.en;
-
-      const completion = await groq.chat.completions.create({
-        messages: [
-          {
-            role: "system",
-            content: `Your name is ${ASSISTANT_NAME}.
+      const messagesPayload = [
+        {
+          role: "system",
+          content: `Your name is ${ASSISTANT_NAME}.
 Target Language: ${rule.name}.
 Rule: ${rule.script}
 Keep answers under 1-2 short direct sentences. Do not add filler greetings like "Namaste! I am ${ASSISTANT_NAME}".`
-          },
-          { role: "user", content: text }
-        ],
-        model: "llama-3.1-8b-instant",
-        temperature: 0.7,
-        max_tokens: 300,
-      });
+        },
+        { role: "user", content: text }
+      ];
+
+      let completion;
+      try {
+        completion = await groq.chat.completions.create({
+          messages: messagesPayload,
+          model: "llama-3.1-8b-instant",
+          temperature: 0.7,
+          max_tokens: 300,
+        });
+      } catch (modelErr) {
+        console.warn("Primary model llama-3.1-8b-instant failed, trying fallback llama-3.3-70b-versatile:", modelErr.message);
+        completion = await groq.chat.completions.create({
+          messages: messagesPayload,
+          model: "llama-3.3-70b-versatile",
+          temperature: 0.7,
+          max_tokens: 300,
+        });
+      }
 
       const answer = completion.choices[0]?.message?.content?.trim();
       if (!answer) throw new Error("Empty AI response from Groq");

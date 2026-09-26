@@ -26,19 +26,19 @@ app.use(express.static(path.join(__dirname, "public")));
 const LANG_RULES = {
   mr: { 
     name: "Marathi (Devanagari)", 
-    script: "Reply STRICTLY in authentic Devanagari Marathi (Pune dialect). Do NOT use English letters." 
+    script: "Reply STRICTLY in simple, conversational Devanagari Marathi (Pune style). Do NOT use bullet points, bold text, or long sentences." 
   },
   hi: { 
     name: "Hindi (Devanagari)", 
-    script: "Use proper Hindi Devanagari script." 
+    script: "Use clean, spoken Hindi in Devanagari script." 
   },
   "hi-roman": { 
     name: "Roman Hindi", 
-    script: "Use Hindi in English letters." 
+    script: "Use natural spoken Hindi in English letters." 
   },
   en: { 
     name: "Indian English", 
-    script: "Reply in natural Indian English." 
+    script: "Reply in simple, friendly Indian English conversational style." 
   }
 };
 
@@ -82,7 +82,7 @@ wss.on("connection", ws => {
       const lang = detectLanguage(text);
       const cleanText = text.toLowerCase().replace(/[^\w\s\u0900-\u097f]/g, "").trim();
 
-      // 1. Language Request Intercept
+      // 1. Direct Intercept for Language Request
       if (/\b(marathi madhe bol|marathi bol|speak in marathi)\b/i.test(cleanText)) {
         const marathiResponse = "हो नक्कीच! मी आता तुमच्याशी मराठीत बोलेन. सांगा, मी तुम्हाला कशी मदत करू?";
         db.run("INSERT INTO interactions (user_prompt, agent_response) VALUES (?, ?)", [text, marathiResponse]);
@@ -90,7 +90,7 @@ wss.on("connection", ws => {
         return;
       }
 
-      // 2. Identity Request Intercept
+      // 2. Direct Intercept for Identity / Name Questions
       if (
         (/\b(nav|naav|naam|name|नाव)\b/i.test(cleanText) && /\b(kay|kaay|kya|what|kon|who|काय)\b/i.test(cleanText)) ||
         /\b(tu kon aahes|tu kon ahes|who are you|tumhara naam kya hai|तू कोण आहेस)\b/i.test(cleanText)
@@ -105,7 +105,7 @@ wss.on("connection", ws => {
         return;
       }
 
-      // 3. Direct Greeting Intercept
+      // 3. Direct Intercept for Greetings
       if (/^(hello|hi|hey|namaste|namaskar|नमस्कार)\b/i.test(cleanText)) {
         let greetingResponse = "नमस्कार! मी तुला कशी मदत करू शकते?";
         if (lang === "hi") greetingResponse = "नमस्ते! मैं आपकी क्या मदद कर सकती हूँ?";
@@ -117,17 +117,15 @@ wss.on("connection", ws => {
         return;
       }
 
-      // 4. Model Fallback Engine using Active Groq Models
+      // 4. Conversational Model Execution
       const rule = LANG_RULES[lang] || LANG_RULES.en;
       const messagesPayload = [
         {
           role: "system",
-          content: `Your name is ${ASSISTANT_NAME}. You are a female AI assistant.
+          content: `Your name is ${ASSISTANT_NAME}. You are an Indian female voice assistant.
 Target Language: ${rule.name}.
 Rule: ${rule.script}
-STRICT RULE: Do NOT output time greetings like "Good afternoon" unless the user explicitly asks.
-Grammar Rule: ALWAYS use female self-referencing verbs (e.g., in Marathi use 'मी करू शकते', 'मी सांगेन', 'माझे नाव आर्या आहे').
-Keep answers short, clear, and direct (1-2 sentences).`
+CRITICAL FOR SPEECH SYNTHESIS: Speak like a human talking directly to a friend. Never use markdown formatting (no asterisks, hash tags, or bullet lists). Keep sentences short and naturally spoken.`
         },
         { role: "user", content: text }
       ];

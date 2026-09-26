@@ -77,64 +77,81 @@ function stopSpeaking() {
   }
 }
 
-// === HUMAN-LIKE NATURAL FEMALE TTS ENGINE ===
+// === CLEAN TEXT FOR NATURAL HUMAN SPEECH FLOW ===
+function sanitizeForSpeech(rawText) {
+  return rawText
+    .replace(/[*#_~`>-]/g, " ")          // Remove markdown formatting symbols
+    .replace(/\s+/g, " ")               // Collapse multiple spaces
+    .replace(/([.!?])\s*/g, "$1 ")       // Ensure smooth natural pauses after sentences
+    .trim();
+}
+
+// === NATURAL INDIAN FEMALE TTS ENGINE ===
 function speak(text, language) {
   stopSpeaking();
 
-  const isDevanagari = /[\u0900-\u097F]/.test(text);
-
-  // Soften harsh period stops into natural conversational pauses
-  const conversationalText = text.replace(/([.!?])\s*/g, "$1 ");
+  const cleanText = sanitizeForSpeech(text);
+  const isDevanagari = /[\u0900-\u097F]/.test(cleanText);
 
   const speakNow = () => {
     const voices = speechSynthesis.getVoices();
 
-    // Priority list for soft, natural female voices across OS/Browsers
-    const femaleKeywords = ["swara", "sangeeta", "kalpana", "neerja", "heera", "zira", "google hindi", "google marathi", "google indian english", "natural", "female"];
+    // Priority list for Indian Female accents across Windows/Mac/Android/Chrome
+    const indianFemaleKeywords = [
+      "swara", "neerja", "sangeeta", "kalpana", "heera",
+      "google मराठी", "google हिन्दी", "google marathi", "google hindi",
+      "google english (india)", "google indian english", "en-in", "hi-in", "mr-in", "zira"
+    ];
+
     const maleKeywords = ["male", "david", "ravi", "hemant", "mark", "george", "guy"];
 
-    const isExplicitFemale = (v) => {
+    const isIndianFemaleVoice = (v) => {
       const name = v.name.toLowerCase();
-      return femaleKeywords.some(k => name.includes(k)) && !maleKeywords.some(k => name.includes(k));
+      const lang = v.lang.toLowerCase();
+      const matchesKeyword = indianFemaleKeywords.some(k => name.includes(k) || lang.includes(k));
+      const isMale = maleKeywords.some(k => name.includes(k));
+      return matchesKeyword && !isMale;
     };
 
     let selectedVoice = null;
 
     if (isDevanagari) {
-      selectedVoice = voices.find(v => (v.lang.includes("mr") || v.lang.includes("hi")) && isExplicitFemale(v)) ||
+      // Pick explicit Indian Devanagari female voice
+      selectedVoice = voices.find(v => (v.lang.includes("mr") || v.lang.includes("hi")) && isIndianFemaleVoice(v)) ||
                       voices.find(v => v.lang.includes("mr-IN") || v.lang.includes("hi-IN"));
     } else {
-      selectedVoice = voices.find(v => v.lang.includes("en-IN") && isExplicitFemale(v)) ||
-                      voices.find(v => v.lang.includes("en") && isExplicitFemale(v));
+      // Pick explicit Indian English female voice
+      selectedVoice = voices.find(v => v.lang.includes("en-IN") && isIndianFemaleVoice(v)) ||
+                      voices.find(v => isIndianFemaleVoice(v));
     }
 
     if (selectedVoice) {
-      const utterance = new SpeechSynthesisUtterance(conversationalText);
+      const utterance = new SpeechSynthesisUtterance(cleanText);
       utterance.voice = selectedVoice;
       utterance.lang = selectedVoice.lang;
       
-      // Conversational flow parameters: smooth rate and soft female pitch
-      utterance.rate = 0.92;  
-      utterance.pitch = 1.22; 
+      // Conversational flow adjustments
+      utterance.rate = 0.98;   // Human conversational rhythm speed
+      utterance.pitch = 1.15;  // Warm, natural female voice pitch
 
       utterance.onstart = () => { if (status) status.innerText = "🔊 Speaking..."; };
       utterance.onend = () => { if (status) status.innerText = "Ready"; };
       speechSynthesis.speak(utterance);
     } else {
-      // High-quality online audio fallback when system lacks installed female voices
-      const langCode = isDevanagari ? "mr" : "en";
-      const encodedText = encodeURIComponent(conversationalText);
+      // High quality Indian female online TTS fallback
+      const langCode = isDevanagari ? "mr" : "en-IN";
+      const encodedText = encodeURIComponent(cleanText);
       const audioUrl = `https://translate.google.com/translate_tts?ie=UTF-8&q=${encodedText}&tl=${langCode}&client=tw-ob`;
 
       currentAudio = new Audio(audioUrl);
-      currentAudio.playbackRate = 0.95;
+      currentAudio.playbackRate = 1.0;
 
       if (status) status.innerText = "🔊 Speaking...";
       currentAudio.play().catch(() => {
-        const utterance = new SpeechSynthesisUtterance(conversationalText);
-        utterance.lang = isDevanagari ? "hi-IN" : "en-IN";
-        utterance.pitch = 1.25;
-        utterance.rate = 0.90;
+        const utterance = new SpeechSynthesisUtterance(cleanText);
+        utterance.lang = isDevanagari ? "mr-IN" : "en-IN";
+        utterance.pitch = 1.18;
+        utterance.rate = 0.95;
         utterance.onstart = () => { if (status) status.innerText = "🔊 Speaking..."; };
         utterance.onend = () => { if (status) status.innerText = "Ready"; };
         speechSynthesis.speak(utterance);

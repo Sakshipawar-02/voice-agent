@@ -20,6 +20,26 @@ const upload = multer({
   limits: { fileSize: 20 * 1024 * 1024 }
 });
 const requestWindows = new Map();
+const languageNames = {
+  arabic: 'ar', bengali: 'bn', chinese: 'zh', dutch: 'nl', english: 'en', farsi: 'fa',
+  french: 'fr', german: 'de', gujarati: 'gu', hindi: 'hi', indonesian: 'id', italian: 'it',
+  japanese: 'ja', kannada: 'kn', korean: 'ko', malayalam: 'ml', marathi: 'mr', nepali: 'ne',
+  persian: 'fa', polish: 'pl', portuguese: 'pt', punjabi: 'pa', russian: 'ru', spanish: 'es',
+  swahili: 'sw', tamil: 'ta', telugu: 'te', thai: 'th', turkish: 'tr', ukrainian: 'uk',
+  urdu: 'ur', vietnamese: 'vi'
+};
+
+function normalizeLanguageTag(value) {
+  const normalized = String(value || '').trim();
+  if (!normalized) return 'en';
+  const languageNameTag = languageNames[normalized.toLowerCase()];
+  if (languageNameTag) return languageNameTag;
+  try {
+    return new Intl.Locale(normalized).toString();
+  } catch {
+    return 'en';
+  }
+}
 
 app.use(express.json({ limit: '32kb' }));
 app.use(express.static(path.join(__dirname, 'public')));
@@ -92,14 +112,35 @@ app.post('/api/voice-chat', limitVoiceRequests, upload.single('audio'), async (r
     const completion = await groq.chat.completions.create({
       model: process.env.GROQ_CHAT_MODEL || 'openai/gpt-oss-20b',
       messages: [
-        { role: 'system', content: 'You are a friendly, concise voice assistant. Reply naturally and keep spoken answers brief.' },
+        {
+          role: 'system',
+          content: 'You are a friendly, concise multilingual voice assistant. Reply in the same language and writing script as the user’s latest message. If the user mixes languages, naturally mirror that mix. Do not switch to English unless asked. Keep answers natural and suitable for speaking aloud.'
+        },
         ...history,
         { role: 'user', content: userText }
       ],
       max_tokens: 300,
-      temperature: 0.6
+      temperature: 0.6,
+      response_format: {
+        type: 'json_schema',
+        json_schema: {
+          name: 'multilingual_voice_reply',
+          strict: true,
+          schema: {
+            type: 'object',
+            properties: {
+              reply: { type: 'string' },
+              language: { type: 'string', description: 'BCP-47 language tag for the reply, such as en, hi, es, or fr.' }
+            },
+            required: ['reply', 'language'],
+            additionalProperties: false
+          }
+        }
+      }
     });
-    const reply = completion.choices[0]?.message?.content?.trim();
+    const answer = JSON.parse(completion.choices[0]?.message?.content || '{}');
+    const reply = answer.reply?.trim();
+    const language = normalizeLanguageTag(answer.language);
     if (!reply) throw new Error('Groq returned an empty response.');
 
     try {
@@ -108,7 +149,7 @@ app.post('/api/voice-chat', limitVoiceRequests, upload.single('audio'), async (r
       // Conversation still succeeds if persistence is temporarily unavailable.
       console.error('[DB] Could not save conversation:', error);
     }
-    res.json({ transcript: userText, reply });
+    res.json({ transcript: userText, reply, language });
   } catch (error) {
     console.error('[Groq] Voice request failed:', error);
     const status = error.status === 401 ? 503 : 502;

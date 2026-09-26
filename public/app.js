@@ -3,6 +3,9 @@ const sendBtn = document.getElementById('sendBtn');
 const stopBtn = document.getElementById('stopBtn');
 const statusBadge = document.getElementById('statusBadge');
 const transcriptBox = document.getElementById('transcriptBox');
+const historyList = document.getElementById('historyList');
+const historyCount = document.getElementById('historyCount');
+const refreshHistoryBtn = document.getElementById('refreshHistoryBtn');
 
 let mediaStream = null;
 let recorder = null;
@@ -28,10 +31,81 @@ function appendLog(label, text) {
   transcriptBox.scrollTop = transcriptBox.scrollHeight;
 }
 
+function appendHistoryText(parent, label, value) {
+  const line = document.createElement('p');
+  const heading = document.createElement('strong');
+  heading.textContent = `${label}: `;
+  line.append(heading, document.createTextNode(value || ''));
+  parent.appendChild(line);
+}
+
+async function loadHistory() {
+  historyCount.textContent = 'Loading conversations…';
+  refreshHistoryBtn.disabled = true;
+  try {
+    const response = await fetch('/api/history');
+    const result = await response.json();
+    if (!response.ok || !result.success) throw new Error(result.error || 'Could not load conversations.');
+    const logs = result.logs || [];
+    historyCount.textContent = `${logs.length} saved conversation${logs.length === 1 ? '' : 's'}`;
+    historyList.replaceChildren();
+    if (!logs.length) {
+      const empty = document.createElement('p');
+      empty.className = 'muted';
+      empty.textContent = 'No conversations yet. Your saved chats will show up here.';
+      historyList.appendChild(empty);
+      return;
+    }
+    for (const log of logs) {
+      const item = document.createElement('article');
+      item.className = 'history-item';
+      const time = document.createElement('p');
+      time.className = 'history-time';
+      const parsedDate = new Date(`${log.timestamp || ''}Z`);
+      time.textContent = Number.isNaN(parsedDate.getTime()) ? '' : parsedDate.toLocaleString();
+      item.appendChild(time);
+      appendHistoryText(item, 'You', log.user_prompt);
+      appendHistoryText(item, 'AI', log.agent_response);
+      historyList.appendChild(item);
+    }
+  } catch (error) {
+    historyCount.textContent = error.message;
+    historyList.replaceChildren();
+  } finally {
+    refreshHistoryBtn.disabled = false;
+  }
+}
+
+refreshHistoryBtn.addEventListener('click', loadHistory);
+loadHistory();
+
 function supportedAudioType() {
   if (!window.MediaRecorder) return '';
   return ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/ogg;codecs=opus']
     .find((type) => MediaRecorder.isTypeSupported(type)) || '';
+}
+
+function speakReply(text, languageTag) {
+  if (!('speechSynthesis' in window)) return false;
+  const utterance = new SpeechSynthesisUtterance(text);
+  utterance.lang = languageTag || 'en';
+  const requestedLanguage = utterance.lang.toLowerCase();
+  const baseLanguage = requestedLanguage.split('-')[0];
+  const voices = window.speechSynthesis.getVoices();
+  const voice = voices.find((item) => item.lang.toLowerCase() === requestedLanguage)
+    || voices.find((item) => item.lang.toLowerCase().split('-')[0] === baseLanguage);
+  if (voice) utterance.voice = voice;
+  else appendLog('Voice', `No ${languageTag} voice is installed in this browser/device; speech will use its default voice. Install a matching system voice for better pronunciation.`);
+
+  assistantSpeaking = true;
+  setStatus('Speaking response…', 'active');
+  utterance.onend = utterance.onerror = () => {
+    assistantSpeaking = false;
+    if (mediaStream?.active && !requestInProgress) beginRecording();
+  };
+  window.speechSynthesis.cancel();
+  window.speechSynthesis.speak(utterance);
+  return true;
 }
 
 function beginRecording() {
@@ -126,17 +200,9 @@ sendBtn.addEventListener('click', async () => {
     appendLog('AI', result.reply);
     history.push({ role: 'user', content: result.transcript }, { role: 'assistant', content: result.reply });
     history = history.slice(-10);
-    if ('speechSynthesis' in window) {
-      window.speechSynthesis.cancel();
-      assistantSpeaking = true;
-      setStatus('Speaking response…', 'active');
-      const utterance = new SpeechSynthesisUtterance(result.reply);
-      utterance.onend = utterance.onerror = () => {
-        assistantSpeaking = false;
-        if (mediaStream?.active && !requestInProgress) beginRecording();
-      };
-      window.speechSynthesis.speak(utterance);
-    }
+    loadHistory();
+    const speaking = speakReply(result.reply, result.language);
+    if (!speaking) appendLog('Voice', 'Speech synthesis is not available in this browser.');
     if (!assistantSpeaking) setStatus('Listening…', 'active');
   } catch (error) {
     console.error('Voice request failed:', error);

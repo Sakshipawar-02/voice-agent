@@ -5,124 +5,69 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Voice Agent</title>
   <style>
-    * {
-      box-sizing: border-box;
-      margin: 0;
-      padding: 0;
-    }
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
-      background-color: #0f172a;
-      color: #f8fafc;
-      display: flex;
-      justify-content: center;
-      align-items: center;
-      min-height: 100vh;
-      padding: 1rem;
-    }
-    .card {
-      background: #1e293b;
-      padding: 2.5rem;
-      border-radius: 1rem;
-      box-shadow: 0 10px 25px rgba(0, 0, 0, 0.5);
-      text-align: center;
-      max-width: 450px;
-      width: 100%;
-    }
-    h1 {
-      margin-bottom: 0.5rem;
-      font-size: 1.75rem;
-      color: #38bdf8;
-    }
-    p.subtitle {
-      color: #94a3b8;
-      font-size: 0.9rem;
-      margin-bottom: 2rem;
-    }
-    .status-badge {
-      display: inline-block;
-      padding: 0.35rem 1rem;
-      border-radius: 9999px;
-      font-size: 0.85rem;
-      font-weight: 600;
-      margin-bottom: 1.75rem;
-      background: #334155;
-      color: #94a3b8;
-      transition: all 0.3s ease;
-    }
-    .status-badge.active {
-      background: #166534;
-      color: #4ade80;
-    }
-    .status-badge.error {
-      background: #991b1b;
-      color: #fca5a5;
-    }
-    .btn-group {
-      display: flex;
-      gap: 1rem;
-      justify-content: center;
-      margin-bottom: 1.5rem;
-    }
-    button {
-      flex: 1;
-      padding: 0.85rem 1.25rem;
-      font-size: 1rem;
-      font-weight: 600;
-      border: none;
-      border-radius: 0.5rem;
-      cursor: pointer;
-      transition: all 0.2s ease;
-    }
-    #startBtn {
-      background: #2563eb;
-      color: #ffffff;
-    }
-    #startBtn:hover:not(:disabled) {
-      background: #1d4ed8;
-    }
-    #stopBtn {
-      background: #dc2626;
-      color: #ffffff;
-    }
-    #stopBtn:hover:not(:disabled) {
-      background: #b91c1c;
-    }
-    button:disabled {
-      background: #475569 !important;
-      cursor: not-allowed;
-      opacity: 0.5;
-    }
-    .transcript-box {
-      background: #0f172a;
-      padding: 1rem;
-      border-radius: 0.5rem;
-      text-align: left;
-      min-height: 100px;
-      max-height: 180px;
-      overflow-y: auto;
-      font-size: 0.875rem;
-      color: #cbd5e1;
-      border: 1px solid #334155;
-    }
+    * { box-sizing: border-box; }
+    body { margin: 0; padding: 32px 20px; min-height: 100vh; background: #0f172a; color: #f8fafc; font-family: system-ui, -apple-system, 'Segoe UI', sans-serif; }
+    .app-shell { max-width: 1180px; margin: auto; }
+    .page-header { margin-bottom: 24px; }
+    h1 { margin: 0 0 6px; font-size: 1.8rem; color: #38bdf8; }
+    .subtitle, .muted { margin: 0; color: #94a3b8; }
+    .main-grid { display: grid; grid-template-columns: minmax(300px, .9fr) minmax(400px, 1.4fr); gap: 20px; align-items: start; }
+    .card { min-width: 0; padding: 24px; border: 1px solid #334155; border-radius: 14px; background: #1e293b; box-shadow: 0 10px 25px #0003; }
+    .card-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 18px; }
+    h2 { margin: 0; font-size: 1.15rem; }
+    .status-badge { display: inline-block; padding: 6px 12px; border-radius: 999px; background: #334155; color: #cbd5e1; font-size: .85rem; font-weight: 600; }
+    .status-badge.active { background: #166534; color: #bbf7d0; }
+    .status-badge.error { background: #991b1b; color: #fecaca; }
+    .btn-group { display: flex; flex-wrap: wrap; gap: 8px; margin: 18px 0; }
+    button { padding: 10px 14px; border: 0; border-radius: 8px; background: #2563eb; color: white; font: inherit; font-weight: 600; cursor: pointer; }
+    button:hover:not(:disabled) { filter: brightness(1.12); }
+    button:disabled { background: #475569; cursor: not-allowed; opacity: .6; }
+    #sendBtn { background: #0891b2; }
+    #stopBtn { background: #dc2626; }
+    #refreshHistoryBtn { background: #334155; padding: 8px 12px; }
+    .transcript-box { min-height: 160px; max-height: 360px; overflow: auto; padding: 14px; border: 1px solid #334155; border-radius: 8px; background: #0f172a; color: #cbd5e1; font-size: .9rem; }
+    .transcript-box strong { color: #7dd3fc; }
+    .history-count { margin: 0 0 12px; color: #94a3b8; font-size: .9rem; }
+    .history-list { display: grid; gap: 12px; max-height: 520px; overflow: auto; }
+    .history-item { padding: 14px; border: 1px solid #334155; border-radius: 9px; background: #0f172a; }
+    .history-time { margin: 0 0 10px; color: #94a3b8; font-size: .78rem; }
+    .history-item p { margin: 7px 0 0; color: #cbd5e1; line-height: 1.45; overflow-wrap: anywhere; }
+    .history-item strong { color: #7dd3fc; }
+    @media (max-width: 760px) { body { padding: 20px 14px; } .main-grid { grid-template-columns: 1fr; } .card { padding: 18px; } }
   </style>
 </head>
 <body>
-  <div class="card">
-    <h1>Voice Agent</h1>
-    <p class="subtitle">Speak, send your message, and hear Groq's reply</p>
-
-    <div id="statusBadge" class="status-badge">Disconnected</div>
-
-    <div class="btn-group">
-      <button id="startBtn">Start Call</button>
-      <button id="sendBtn" disabled>Send to AI</button>
-      <button id="stopBtn" disabled>End Call</button>
+  <main class="app-shell">
+    <header class="page-header">
+      <h1>Voice Agent</h1>
+      <p class="subtitle">Talk with Groq AI and review recent conversations</p>
+    </header>
+    <div class="main-grid">
+      <section class="card" aria-labelledby="voiceHeading">
+        <div class="card-header">
+          <h2 id="voiceHeading">Voice chat</h2>
+          <div id="statusBadge" class="status-badge">Disconnected</div>
+        </div>
+        <p class="muted">Start the microphone, speak, then send your message.</p>
+        <div class="btn-group">
+          <button id="startBtn">Start Call</button>
+          <button id="sendBtn" disabled>Send to AI</button>
+          <button id="stopBtn" disabled>End Call</button>
+        </div>
+        <div id="transcriptBox" class="transcript-box" aria-live="polite">
+          <em>Transcripts and replies will appear here.</em>
+        </div>
+      </section>
+      <section class="card" aria-labelledby="dashboardHeading">
+        <div class="card-header">
+          <h2 id="dashboardHeading">Conversation dashboard</h2>
+          <button id="refreshHistoryBtn" type="button">Refresh</button>
+        </div>
+        <p id="historyCount" class="history-count">Loading conversations…</p>
+        <div id="historyList" class="history-list" aria-live="polite"></div>
+      </section>
     </div>
-
-    <div id="transcriptBox" class="transcript-box">
-      <em>Transcripts and system status will appear here...</em>
-    </div>
+  </main>
   </div>
 
   <script src="app.js"></script>

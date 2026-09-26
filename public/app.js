@@ -5,7 +5,6 @@ const [start, stop, status, user, answer, table, clear] =
 
 let currentAudio = null;
 
-// === SPEECH TO TEXT (STT) LOGIC ===
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
 
 if (!SR) {
@@ -77,7 +76,7 @@ function stopSpeaking() {
   }
 }
 
-// === DUAL-LAYER TEXT TO SPEECH (TTS) FOR FEMALE VOICE ===
+// Improved Natural Female Voice Configuration
 function speak(text, language) {
   stopSpeaking();
 
@@ -88,25 +87,27 @@ function speak(text, language) {
 
     const isExplicitFemale = (v) => {
       const name = v.name.toLowerCase();
-      const femaleKeywords = ["female", "swara", "kalpana", "heera", "neerja", "sangeeta", "zira", "google", "natural"];
+      const femaleKeywords = ["zira", "heera", "swara", "kalpana", "neerja", "sangeeta", "female", "natural", "google"];
       const maleKeywords = ["male", "david", "ravi", "hemant", "mark", "george"];
       return femaleKeywords.some(k => name.includes(k)) && !maleKeywords.some(k => name.includes(k));
     };
 
     let selectedVoice = null;
+
     if (isDevanagari) {
-      selectedVoice = voices.find(v => (v.lang.includes("mr") || v.lang.includes("hi")) && isExplicitFemale(v));
+      selectedVoice = voices.find(v => (v.lang.includes("mr") || v.lang.includes("hi")) && isExplicitFemale(v)) ||
+                      voices.find(v => v.lang.includes("hi") || v.lang.includes("mr"));
     } else {
       selectedVoice = voices.find(v => v.lang.includes("en-IN") && isExplicitFemale(v)) ||
-                      voices.find(v => isExplicitFemale(v));
+                      voices.find(v => v.lang.includes("en") && isExplicitFemale(v));
     }
 
     if (selectedVoice) {
       const utterance = new SpeechSynthesisUtterance(text);
       utterance.voice = selectedVoice;
       utterance.lang = selectedVoice.lang;
-      utterance.rate = 0.90;
-      utterance.pitch = 1.30;
+      utterance.rate = 1.0;  // Standard natural speaking speed
+      utterance.pitch = 1.15; // Natural warm female pitch level
 
       utterance.onstart = () => { if (status) status.innerText = "🔊 Speaking..."; };
       utterance.onend = () => { if (status) status.innerText = "Ready"; };
@@ -117,14 +118,14 @@ function speak(text, language) {
       const audioUrl = `https://translate.google.com/translate_tts?ie=UTF-8&q=${encodedText}&tl=${langCode}&client=tw-ob`;
 
       currentAudio = new Audio(audioUrl);
-      currentAudio.playbackRate = 0.95;
+      currentAudio.playbackRate = 1.0;
 
       if (status) status.innerText = "🔊 Speaking...";
       currentAudio.play().catch(() => {
         const utterance = new SpeechSynthesisUtterance(text);
         utterance.lang = isDevanagari ? "hi-IN" : "en-IN";
-        utterance.pitch = 1.40;
-        utterance.rate = 0.88;
+        utterance.pitch = 1.20;
+        utterance.rate = 0.95;
         utterance.onstart = () => { if (status) status.innerText = "🔊 Speaking..."; };
         utterance.onend = () => { if (status) status.innerText = "Ready"; };
         speechSynthesis.speak(utterance);

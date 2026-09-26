@@ -82,11 +82,23 @@ wss.on("connection", ws => {
       const lang = detectLanguage(text);
       const cleanText = text.toLowerCase().replace(/[^\w\s\u0900-\u097f]/g, "").trim();
 
-      // Direct Intercept for Language Change Request ("Marathi Madhe bol")
-      if (/\b(marathi madhe bol|marathi bol|speak in marathi|marathi)\b/i.test(cleanText)) {
+      // Direct Intercept for Language Change Request
+      if (/\b(marathi madhe bol|marathi bol|speak in marathi)\b/i.test(cleanText)) {
         const marathiResponse = "हो नक्कीच! मी आता तुमच्याशी मराठीत बोलेन. सांगा, मी तुम्हाला कशी मदत करू?";
         db.run("INSERT INTO interactions (user_prompt, agent_response) VALUES (?, ?)", [text, marathiResponse]);
         ws.send(JSON.stringify({ type: "AGENT_RESPONSE", text: marathiResponse, language: "mr" }));
+        return;
+      }
+
+      // Direct Intercept for Greetings (ONLY reply with time-based greetings if explicitly requested)
+      if (/^(good morning|good afternoon|good evening|say good afternoon)\b/i.test(cleanText)) {
+        let greetingResponse = "शुभ दुपार! मी तुला कशी मदत करू शकते?";
+        if (lang === "hi") greetingResponse = "शुभ दोपहर! मैं आपकी क्या मदद कर सकती हूँ?";
+        else if (lang === "hi-roman") greetingResponse = "Shubh dopahar! Main aapki kya madad kar sakti hoon?";
+        else if (lang === "en") greetingResponse = "Good afternoon! How can I help you today?";
+
+        db.run("INSERT INTO interactions (user_prompt, agent_response) VALUES (?, ?)", [text, greetingResponse]);
+        ws.send(JSON.stringify({ type: "AGENT_RESPONSE", text: greetingResponse, language: lang }));
         return;
       }
 
@@ -105,16 +117,17 @@ wss.on("connection", ws => {
         return;
       }
 
-      // Groq Model Cascade Execution with Automatic Fallbacks
+      // Groq Model Cascade Execution with Active Fallback Models
       const rule = LANG_RULES[lang] || LANG_RULES.en;
       const messagesPayload = [
         {
           role: "system",
-          content: `Your name is ${ASSISTANT_NAME}. You are a helpful female AI assistant.
+          content: `Your name is ${ASSISTANT_NAME}. You are a female AI assistant.
 Target Language: ${rule.name}.
 Rule: ${rule.script}
+CRITICAL INSTRUCTION: Do NOT include greetings like "Good afternoon", "Good morning", or "Namaste" unless the user explicitly asks for a greeting.
 Grammar Rule: ALWAYS use female self-referencing verbs (e.g., in Marathi use 'मी करू शकते', 'मी सांगेन', 'माझे नाव आर्या आहे').
-Keep answers short and direct (1-2 sentences).`
+Keep answers short, clear, and direct (1-2 sentences).`
         },
         { role: "user", content: text }
       ];
@@ -139,13 +152,13 @@ Keep answers short and direct (1-2 sentences).`
           answer = completion.choices[0]?.message?.content?.trim();
           if (answer) break;
         } catch (err) {
-          console.warn(`Model ${model} failed: ${err.message}. Trying next model...`);
+          console.warn(`Model ${model} failed: ${err.message}. Trying fallback...`);
           lastError = err;
         }
       }
 
       if (!answer) {
-        throw new Error(lastError ? lastError.message : "Failed to generate response from all available models.");
+        throw new Error(lastError ? lastError.message : "Failed to retrieve response from active Groq models.");
       }
 
       db.run("INSERT INTO interactions (user_prompt, agent_response) VALUES (?, ?)", [text, answer]);

@@ -26,6 +26,7 @@ let history = [];
 let voiceNotice = '';
 
 function setStatus(text, state = 'normal') {
+  if (!statusBadge) return;
   statusBadge.textContent = text;
   statusBadge.className = '';
   if (state === 'active') statusBadge.classList.add('active');

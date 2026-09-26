@@ -4,8 +4,8 @@ import http from "http";
 import WebSocket from "ws";
 import path from "path";
 import { fileURLToPath } from "url";
+import multer from "multer";
 import Groq from "groq-sdk";
-import { SarvamAI } from "sarvamai";
 import db from "./database.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -16,46 +16,109 @@ const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
 
 const PORT = process.env.PORT || 3000;
-const MODEL = "llama-3.3-70b-versatile";
+const GROQ_MODEL = "llama-3.3-70b-versatile";
 
 const groq = new Groq({
   apiKey: process.env.GROQ_API_KEY
 });
 
-const sarvam = new SarvamAI({
-  apiSubscriptionKey: process.env.SARVAM_API_KEY
+const upload = multer({
+  storage: multer.memoryStorage()
 });
 
 app.use(express.static(path.join(__dirname, "public")));
 
-function detectLanguage(text) {
-  if (/[\u0900-\u097F]/.test(text)) {
-    if (/काय|कसा|कशी|कसे|तू|तुम्ही|मी|मला|तुला|आहे|नाही|करत|कुठे/.test(text))
-      return "mr-IN";
+/* ---------- SARVAM STT ---------- */
 
-    return "hi-IN";
+app.post("/api/stt", upload.single("audio"), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({
+        error: "No audio received"
+      });
+    }
+
+    const form = new FormData();
+
+    form.append(
+      "file",
+      new Blob([req.file.buffer], {
+        type: req.file.mimetype
+      }),
+      "voice.webm"
+    );
+
+    form.append("model", "saaras:v4");
+
+    const response = await fetch(
+      "https://api.sarvam.ai/speech-to-text",
+      {
+        method: "POST",
+        headers: {
+          "api-subscription-key": process.env.SARVAM_API_KEY
+        },
+        body: form
+      }
+    );
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new Error(
+        data?.error?.message || "Sarvam STT failed"
+      );
+    }
+
+    res.json({
+      text: data.transcript,
+      language: data.language_code
+    });
+
+  } catch (error) {
+    console.error("STT ERROR:", error);
+
+    res.status(500).json({
+      error: error.message
+    });
   }
+});
 
-  if (/\b(kay|kasa|kashi|kase|mi|mala|tula|tumhi|aahe|nahi|karat|kuthe)\b/i.test(text))
-    return "mr-IN";
-
-  if (/\b(hai|hain|aap|tum|mera|mujhe|kya|kaise|nahi)\b/i.test(text))
-    return "hi-IN";
-
-  return "en-IN";
-}
+/* ---------- SARVAM TTS ---------- */
 
 async function generateVoice(text, language) {
-  const response = await sarvam.textToSpeech.convert({
-    text,
-    languageCode: language,
-    model: "bulbul:v3",
-    speaker: "priya",
-    pace: 1.0
-  });
+  const response = await fetch(
+    "https://api.sarvam.ai/text-to-speech",
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "api-subscription-key": process.env.SARVAM_API_KEY
+      },
+      body: JSON.stringify({
+        text: text,
+        target_language_code: language,
+        language_code: language,
+        model: "bulbul:v3",
+        speaker: "priya",
+        pace: 0.95,
+        speech_sample_rate: 24000,
+        output_audio_codec: "wav"
+      })
+    }
+  );
 
-  return response.audios[0];
+  const data = await response.json();
+
+  if (!response.ok) {
+    throw new Error(
+      data?.error?.message || "Sarvam TTS failed"
+    );
+  }
+
+  return data.audios[0];
 }
+
+/* ---------- GROQ + SIRI ---------- */
 
 wss.on("connection", ws => {
   console.log("Client connected");
@@ -67,33 +130,55 @@ wss.on("connection", ws => {
       if (data.type !== "USER_PROMPT") return;
 
       const text = data.text.trim();
-      const language = detectLanguage(text);
+      const language = data.language || "en-IN";
+
+      console.log("User:", text);
+      console.log("Language:", language);
 
       const result = await groq.chat.completions.create({
-        model: MODEL,
+        model: GROQ_MODEL,
+
         messages: [
           {
             role: "system",
             content: `
 You are SIRI, a friendly Indian female voice assistant.
 
-Reply naturally and conversationally.
-Keep replies short.
-Use the same language as the user.
+Reply naturally like a real person speaking.
 
-For Marathi, use proper Marathi Devanagari.
-For Hindi, use proper Hindi Devanagari.
-For English, use natural Indian English.
+Keep answers short and conversational.
 
-Never answer in a different language.
-Do not use markdown, bullets or symbols.
+IMPORTANT LANGUAGE RULES:
+
+If language is mr-IN:
+Reply only in natural Marathi using Devanagari script.
+
+If language is hi-IN:
+Reply only in natural Hindi using Devanagari script.
+
+If language is en-IN:
+Reply only in natural Indian English.
+
+Never change the user's language.
+
+Do not use markdown.
+Do not use bullets.
+Do not use emojis.
+Do not use asterisks.
+
+Your response will be converted directly into voice.
+Write exactly what SIRI should speak.
 `
           },
           {
             role: "user",
-            content: text
+            content: `Language: ${language}
+
+User says:
+${text}`
           }
         ],
+
         temperature: 0.7,
         max_tokens: 150
       });
@@ -102,40 +187,55 @@ Do not use markdown, bullets or symbols.
         result.choices?.[0]?.message?.content?.trim() ||
         "Sorry, I could not understand that.";
 
-      const audio = await generateVoice(answer, language);
+      console.log("SIRI:", answer);
+
+      const audio = await generateVoice(
+        answer,
+        language
+      );
 
       db.run(
-        `INSERT INTO interactions (user_query, agent_response)
-         VALUES (?, ?)`,
+        `INSERT INTO interactions
+        (user_query, agent_response)
+        VALUES (?, ?)`,
         [text, answer]
       );
 
-      ws.send(JSON.stringify({
-        type: "AGENT_RESPONSE",
-        text: answer,
-        language,
-        audio,
-        audioType: "audio/wav"
-      }));
+      ws.send(
+        JSON.stringify({
+          type: "AGENT_RESPONSE",
+          text: answer,
+          language: language,
+          audio: audio,
+          audioType: "audio/wav"
+        })
+      );
 
     } catch (error) {
-      console.error(error);
+      console.error("ERROR:", error);
 
-      ws.send(JSON.stringify({
-        type: "ERROR",
-        message: error.message || "Something went wrong"
-      }));
+      ws.send(
+        JSON.stringify({
+          type: "ERROR",
+          message: error.message
+        })
+      );
     }
   });
 });
+
+/* ---------- HISTORY ---------- */
 
 app.get("/api/history", (req, res) => {
   db.all(
     "SELECT * FROM interactions ORDER BY id DESC",
     [],
     (err, rows) => {
-      if (err)
-        return res.status(500).json({ error: err.message });
+      if (err) {
+        return res.status(500).json({
+          error: err.message
+        });
+      }
 
       res.json(rows);
     }
@@ -143,17 +243,33 @@ app.get("/api/history", (req, res) => {
 });
 
 app.delete("/api/history", (req, res) => {
-  db.run("DELETE FROM interactions", [], err => {
-    if (err)
-      return res.status(500).json({ error: err.message });
+  db.run(
+    "DELETE FROM interactions",
+    [],
+    err => {
+      if (err) {
+        return res.status(500).json({
+          error: err.message
+        });
+      }
 
-    res.json({ success: true });
-  });
+      res.json({
+        success: true
+      });
+    }
+  );
 });
 
+/* ---------- SERVER ---------- */
+
 server.listen(PORT, () => {
-  console.log(`Server running: http://localhost:${PORT}`);
+  console.log(
+    `Server running: http://localhost:${PORT}`
+  );
+
   console.log("Agent: SIRI");
-  console.log("Groq Model:", MODEL);
-  console.log("Sarvam TTS: Bulbul v3");
+  console.log("Groq:", GROQ_MODEL);
+  console.log("STT: Sarvam Saaras v4");
+  console.log("TTS: Sarvam Bulbul v3");
+  console.log("Voice: Priya");
 });

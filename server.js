@@ -309,10 +309,14 @@ app.post('/api/voice-chat', limitVoiceRequests, upload.single('audio'), async (r
     res.json({ transcript: userText, reply, language, audioBase64, voiceError });
   } catch (error) {
     const apiStatus = error.status || error.statusCode;
+    const groqError = error.error?.error || error.error;
+    const detail = typeof groqError?.message === 'string'
+      ? groqError.message.replace(/[\r\n]+/g, ' ').slice(0, 240)
+      : '';
     console.error('[Groq] Voice request failed:', {
       status: apiStatus,
-      code: error.code,
-      message: error.message
+      code: groqError?.code,
+      message: detail || error.message
     });
     const status = [401, 403, 429].includes(apiStatus) ? 503 : 502;
     const message = apiStatus === 401 || apiStatus === 403
@@ -320,7 +324,7 @@ app.post('/api/voice-chat', limitVoiceRequests, upload.single('audio'), async (r
       : apiStatus === 429
         ? 'Groq rate limit or usage quota reached. Check your Groq account usage.'
         : apiStatus === 400 || apiStatus === 404
-          ? `Groq rejected the request (HTTP ${apiStatus}). Check the model and request settings in Render logs.`
+          ? `Groq rejected the request (HTTP ${apiStatus})${detail ? `: ${detail}` : '. Check Render logs.'}`
           : `Groq could not process that message${apiStatus ? ` (HTTP ${apiStatus})` : ''}. Check Render logs and try again.`;
     res.status(status).json({ error: message });
   }

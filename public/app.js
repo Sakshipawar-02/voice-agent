@@ -157,8 +157,9 @@ async function speakReply(result, currentSession) {
     ].join(' ');
   }
   if (!sessionActive || currentSession !== sessionId) return false;
-  // A generic Hindi or English device voice is not a useful substitute for Marathi.
-  if (result.language === 'mr-IN') return false;
+  // Use a device voice only when it matches the reply language. This lets an
+  // installed Marathi voice work when Sarvam is unavailable, without speaking
+  // Marathi text in Hindi or English.
   return speakWithDeviceVoice(result.reply, result.language);
 }
 

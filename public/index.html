@@ -12,6 +12,7 @@
     .card { padding: 22px; border: 1px solid #334155; border-radius: 14px; background: #1e293b; box-shadow: 0 12px 32px #0003; }
     .toolbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 18px; }
     .dashboard-link { color: #7dd3fc; font-weight: 600; }
+    select { min-width: 145px; padding: 10px 12px; border: 1px solid #475569; border-radius: 8px; background: #0f172a; color: #f8fafc; font: inherit; }
     #statusBadge { color: #94a3b8; font-size: .92rem; }
     #statusBadge.active { color: #4ade80; }
     #statusBadge.error { color: #fca5a5; }
@@ -23,6 +24,13 @@
     .turn p { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.5; }
     .turn p + p { margin-top: 12px; }
     .label { display: block; margin-bottom: 4px; color: #7dd3fc; font-size: .78rem; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
+    .correction { display: grid; gap: 10px; margin-bottom: 16px; }
+    .correction[hidden] { display: none; }
+    .correction label { color: #cbd5e1; }
+    .correction textarea { width: 100%; resize: vertical; padding: 12px; border: 1px solid #475569; border-radius: 8px; background: #0f172a; color: #f8fafc; font: inherit; line-height: 1.5; }
+    .correction-actions { display: flex; gap: 10px; }
+    .correction-actions button { min-width: 100px; }
+    .correction-actions .secondary { background: #475569; }
     @media (max-width: 520px) { .card { padding: 16px; } .toolbar { align-items: stretch; flex-direction: column; } button { width: 100%; } }
   </style>
 </head>
@@ -32,11 +40,24 @@
     <section class="card" aria-label="Voice conversation">
       <div class="toolbar">
         <a class="dashboard-link" href="/dashboard.html">Dashboard</a>
+        <select id="speechLanguage" aria-label="Speech language">
+          <option value="mr" selected>मराठी</option>
+          <option value="en">Indian English</option>
+          <option value="auto">Auto detect</option>
+        </select>
         <button id="toggleAgentBtn" type="button">Start voice agent</button>
       </div>
+      <form id="transcriptCorrection" class="correction" hidden>
+        <label for="correctedTranscript">Check what I heard. Edit any mistakes, then send:</label>
+        <textarea id="correctedTranscript" rows="3" required></textarea>
+        <div class="correction-actions">
+          <button id="sendCorrection" type="submit">Send</button>
+          <button id="discardCorrection" class="secondary" type="button">Discard</button>
+        </div>
+      </form>
       <div id="transcriptBox" aria-live="polite"></div>
     </section>
   </main>
-  <script src="app.js?v=hands-free-4"></script>
+  <script src="app.js?v=hands-free-8"></script>
 </body>
 </html>

@@ -18,7 +18,13 @@ function renderConversations(rows) {
     card.appendChild(date);
     items.appendChild(card);
   }
-  message.textContent = rows.length ? `${rows.length} saved conversation${rows.length === 1 ? '' : 's'}.` : 'No saved conversations yet.';
+  if (rows.length === 0) {
+    message.textContent = 'No saved conversations yet.';
+    return;
+  }
+
+  const conversationLabel = rows.length === 1 ? 'conversation' : 'conversations';
+  message.textContent = `${rows.length} saved ${conversationLabel}.`;
 }
 
 async function loadConversations() {

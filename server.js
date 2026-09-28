@@ -25,12 +25,39 @@ const upload = multer({
 });
 const requestWindows = new Map();
 const languageNames = {
-  arabic: 'ar', bengali: 'bn', chinese: 'zh', dutch: 'nl', english: 'en', farsi: 'fa',
-  french: 'fr', german: 'de', gujarati: 'gu', hindi: 'hi', indonesian: 'id', italian: 'it',
-  japanese: 'ja', kannada: 'kn', korean: 'ko', malayalam: 'ml', marathi: 'mr', nepali: 'ne',
-  odia: 'od', persian: 'fa', polish: 'pl', portuguese: 'pt', punjabi: 'pa', russian: 'ru', spanish: 'es',
-  swahili: 'sw', tamil: 'ta', telugu: 'te', thai: 'th', turkish: 'tr', ukrainian: 'uk',
-  urdu: 'ur', vietnamese: 'vi'
+  arabic: 'ar',
+  bengali: 'bn',
+  chinese: 'zh',
+  dutch: 'nl',
+  english: 'en',
+  farsi: 'fa',
+  french: 'fr',
+  german: 'de',
+  gujarati: 'gu',
+  hindi: 'hi',
+  indonesian: 'id',
+  italian: 'it',
+  japanese: 'ja',
+  kannada: 'kn',
+  korean: 'ko',
+  malayalam: 'ml',
+  marathi: 'mr',
+  nepali: 'ne',
+  odia: 'od',
+  persian: 'fa',
+  polish: 'pl',
+  portuguese: 'pt',
+  punjabi: 'pa',
+  russian: 'ru',
+  spanish: 'es',
+  swahili: 'sw',
+  tamil: 'ta',
+  telugu: 'te',
+  thai: 'th',
+  turkish: 'tr',
+  ukrainian: 'uk',
+  urdu: 'ur',
+  vietnamese: 'vi'
 };
 
 function normalizeLanguageTag(value) {
@@ -49,8 +76,16 @@ function normalizeLanguageTag(value) {
 
 function inferReplyLanguage(text, reportedLanguage) {
   const normalizedText = String(text || '').toLowerCase();
-  const marathiMarkers = normalizedText.match(/\b(?:kay|kaay|nav|mala|majha|majhi|maza|mazi|aahe|ahe|kasa|kashi|kuthe|kadhi|aapan|tumhi|mhanje|ithe|tithe|zhala|zala)\b/g) || [];
-  if (marathiMarkers.length >= 2) return 'mr-IN';
+  const marathiMarkers = [
+    'kay', 'kaay', 'kai', 'nav', 'naav', 'mala', 'majha', 'majhi', 'maza', 'mazi',
+    'tujhe', 'tujha', 'aahe', 'ahe', 'kasa', 'kashi', 'kuthe', 'kadhi', 'aapan', 'tumhi',
+    'mhanje', 'ithe', 'tithe', 'zhala', 'zala'
+  ];
+  const markerCount = marathiMarkers.filter((word) =>
+    new RegExp(`\\b${word}\\b`).test(normalizedText)
+  ).length;
+
+  if (markerCount >= 2) return 'mr-IN';
   return reportedLanguage ? normalizeLanguageTag(reportedLanguage) : null;
 }
 
@@ -59,7 +94,12 @@ app.use(express.static(path.join(__dirname, 'public')));
 initDB();
 
 app.get('/api/health', (req, res) => {
-  res.json({ status: 'ok', service: 'voice-agent', aiConfigured: Boolean(groq), indianVoiceConfigured: Boolean(sarvam) });
+  res.json({
+    status: 'ok',
+    service: 'voice-agent',
+    aiConfigured: Boolean(groq),
+    indianVoiceConfigured: Boolean(sarvam)
+  });
 });
 
 app.get('/api/history', async (req, res) => {
@@ -145,16 +185,36 @@ app.post('/api/voice-chat', limitVoiceRequests, upload.single('audio'), async (r
       && normalizeLanguageTag(reportedSpeechLanguage) !== 'mr-IN';
     const languageInstruction = detectedReplyLanguage
       ? transcriptOverridesMetadata
-        ? 'The transcript contains distinctive Marathi words, even if Whisper labeled the audio Hindi. Reply only in natural Marathi written in Devanagari. For example, “Tujhe nav kay?” means “तुझे नाव काय?” and is Marathi. Do not reply in Hindi.'
-        : `Whisper identified the spoken audio as ${detectedReplyLanguage}. Use this as a strong clue and reply only in that language using its normal writing system. The transcript may be written in Latin letters or contain speech recognition errors. Do not translate it or switch to a related language.`
-      : 'Infer the actual spoken language from the words and grammar, not from the script. The transcript may be romanized. For example, “tujhe nav kay” is Marathi, not Hindi; reply in Marathi using Devanagari. Reply in the speaker’s language using its normal writing system.';
+        ? [
+            'The transcript contains distinctive Marathi words, even if Whisper labeled the audio Hindi.',
+            'Reply only in natural Marathi written in Devanagari.',
+            'For example, “Tujhe nav kay?” means “तुझे नाव काय?” and is Marathi.',
+            'Do not reply in Hindi.'
+          ].join(' ')
+        : [
+            `Whisper identified the spoken audio as ${detectedReplyLanguage}.`,
+            'Use this as a strong clue and reply only in that language using its normal writing system.',
+            'The transcript may be written in Latin letters or contain speech recognition errors.',
+            'Do not translate it or switch to a related language.'
+          ].join(' ')
+      : [
+          'Infer the actual spoken language from the words and grammar, not from the script.',
+          'The transcript may be romanized.',
+          'For example, “tujhe nav kay” is Marathi, not Hindi; reply in Marathi using Devanagari.',
+          'Reply in the speaker’s language using its normal writing system.'
+        ].join(' ');
 
     const completion = await groq.chat.completions.create({
       model: process.env.GROQ_CHAT_MODEL || 'openai/gpt-oss-20b',
       messages: [
         {
           role: 'system',
-          content: 'You are a friendly, concise multilingual voice assistant. Reply in the same language and writing script as the user’s latest message. If the user mixes languages, naturally mirror that mix. Do not switch to English unless asked. Keep answers natural and suitable for speaking aloud.'
+          content: [
+            'You are a friendly, concise multilingual voice assistant.',
+            'Infer language from the spoken words, not just the script.',
+            'Reply in that language and normal writing system.',
+            'Keep replies short and natural for speech.'
+          ].join(' ')
         },
         { role: 'system', content: languageInstruction },
         ...history,
@@ -217,13 +277,20 @@ app.post('/api/voice-chat', limitVoiceRequests, upload.single('audio'), async (r
             body: error.body
           });
           if (statusCode === 401 || statusCode === 403) {
-            voiceError = 'Sarvam rejected the API key or this key does not have text-to-speech access. Check the key and account access in Sarvam.';
+            voiceError = [
+              'Sarvam rejected the API key or this key does not have text-to-speech access.',
+              'Check the key and account access in Sarvam.'
+            ].join(' ');
           } else if (statusCode === 429) {
             voiceError = 'Sarvam voice quota or rate limit reached. Check your Sarvam account usage.';
           } else if (statusCode === 400 || statusCode === 422) {
-            voiceError = 'Sarvam rejected the voice request. Check the speaker and language settings in the Render logs.';
+            voiceError = [
+              'Sarvam rejected the voice request.',
+              'Check the speaker and language settings in the Render logs.'
+            ].join(' ');
           } else {
-            voiceError = `Sarvam voice generation failed${statusCode ? ` (HTTP ${statusCode})` : ''}. Check the Render logs for details.`;
+            const errorStatus = statusCode ? ` (HTTP ${statusCode})` : '';
+            voiceError = `Sarvam voice generation failed${errorStatus}. Check the Render logs for details.`;
           }
         }
       }

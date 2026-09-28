@@ -151,7 +151,10 @@ async function playSarvamAudio(base64Audio, currentSession) {
 async function speakReply(result, currentSession) {
   if (result.audioBase64) {
     if (await playSarvamAudio(result.audioBase64, currentSession)) return true;
-    result.voiceError ||= 'The Indian language voice clip was created, but this browser could not play it. Check device volume and audio permissions.';
+    result.voiceError ||= [
+      'The Indian language voice clip was created, but this browser could not play it.',
+      'Check device volume and audio permissions.'
+    ].join(' ');
   }
   if (!sessionActive || currentSession !== sessionId) return false;
   // A generic Hindi or English device voice is not a useful substitute for Marathi.
@@ -168,8 +171,14 @@ async function handleAssistantResult(result, currentSession) {
   history = history.slice(-10);
   if (agentVoiceEnabled) {
     const voicePlayed = await speakReply(result, currentSession);
-    voiceNotice = voicePlayed ? '' : 'Install a device voice for this language or configure Sarvam for a supported Indian language.';
-    if (!voicePlayed) addOutputNotice(result.voiceError || 'I could not play a voice reply. Check audio settings or install a matching voice for this language.');
+    voiceNotice = voicePlayed
+      ? ''
+      : 'Install a device voice for this language or configure Sarvam for a supported Indian language.';
+    if (!voicePlayed) {
+      const message = result.voiceError
+        || 'I could not play a voice reply. Check audio settings or install a matching voice for this language.';
+      addOutputNotice(message);
+    }
   }
 }
 
@@ -203,7 +212,12 @@ async function sendCorrectedTranscript(event) {
     requestInProgress = false;
     sendCorrectionBtn.disabled = false;
     discardCorrectionBtn.disabled = false;
-    if (sessionActive && inputEnabled && currentSession === sessionId && !assistantSpeaking && !pendingCorrection) beginRecording();
+    const canResumeRecording = sessionActive
+      && inputEnabled
+      && currentSession === sessionId
+      && !assistantSpeaking
+      && !pendingCorrection;
+    if (canResumeRecording) beginRecording();
     if (!sessionActive) toggleAgentBtn.disabled = false;
   }
 }
@@ -216,7 +230,13 @@ function discardCorrectedTranscript() {
 }
 
 function beginRecording() {
-  if (!sessionActive || !inputEnabled || requestInProgress || assistantSpeaking || pendingCorrection || !mediaStream) return;
+  const cannotRecord = !sessionActive
+    || !inputEnabled
+    || requestInProgress
+    || assistantSpeaking
+    || pendingCorrection
+    || !mediaStream;
+  if (cannotRecord) return;
   const mimeType = supportedAudioType();
   if (!mimeType) {
     addOutputNotice('This browser cannot record audio. Try the latest Chrome or Edge.');
@@ -304,10 +324,17 @@ async function submitUtterance(currentSession) {
     setStatus('Review and correct the transcript');
     correctedTranscript.focus();
   } catch (error) {
-    if (sessionActive && currentSession === sessionId) addOutputNotice(error.message || 'I could not process that recording. Please try again.');
+    if (sessionActive && currentSession === sessionId) {
+      addOutputNotice(error.message || 'I could not process that recording. Please try again.');
+    }
   } finally {
     requestInProgress = false;
-    if (sessionActive && inputEnabled && currentSession === sessionId && !assistantSpeaking && !pendingCorrection) beginRecording();
+    const canResumeRecording = sessionActive
+      && inputEnabled
+      && currentSession === sessionId
+      && !assistantSpeaking
+      && !pendingCorrection;
+    if (canResumeRecording) beginRecording();
     if (!sessionActive) toggleAgentBtn.disabled = false;
   }
 }
@@ -439,3 +466,4 @@ toggleAssistantVoiceBtn.addEventListener('click', () => {
 });
 correctionForm.addEventListener('submit', sendCorrectedTranscript);
 discardCorrectionBtn.addEventListener('click', discardCorrectedTranscript);
+

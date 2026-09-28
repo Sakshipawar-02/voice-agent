@@ -47,6 +47,13 @@ function normalizeLanguageTag(value) {
   }
 }
 
+function inferReplyLanguage(text, reportedLanguage) {
+  const normalizedText = String(text || '').toLowerCase();
+  const marathiMarkers = normalizedText.match(/\b(?:kay|kaay|nav|mala|majha|majhi|maza|mazi|aahe|ahe|kasa|kashi|kuthe|kadhi|aapan|tumhi|mhanje|ithe|tithe|zhala|zala)\b/g) || [];
+  if (marathiMarkers.length >= 2) return 'mr-IN';
+  return reportedLanguage ? normalizeLanguageTag(reportedLanguage) : null;
+}
+
 app.use(express.json({ limit: '32kb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 initDB();
@@ -132,9 +139,14 @@ app.post('/api/voice-chat', limitVoiceRequests, upload.single('audio'), async (r
     const reportedSpeechLanguage = typeof req.body.detectedLanguage === 'string'
       ? req.body.detectedLanguage.slice(0, 40)
       : null;
-    const detectedReplyLanguage = reportedSpeechLanguage ? normalizeLanguageTag(reportedSpeechLanguage) : null;
+    const detectedReplyLanguage = inferReplyLanguage(userText, reportedSpeechLanguage);
+    const transcriptOverridesMetadata = detectedReplyLanguage === 'mr-IN'
+      && reportedSpeechLanguage
+      && normalizeLanguageTag(reportedSpeechLanguage) !== 'mr-IN';
     const languageInstruction = detectedReplyLanguage
-      ? `Whisper identified the spoken audio as ${detectedReplyLanguage}. Use this as a strong clue and reply only in that language using its normal writing system. The transcript may be written in Latin letters or contain speech recognition errors. Do not translate it or switch to a related language.`
+      ? transcriptOverridesMetadata
+        ? 'The transcript contains distinctive Marathi words, even if Whisper labeled the audio Hindi. Reply only in natural Marathi written in Devanagari. For example, “Tujhe nav kay?” means “तुझे नाव काय?” and is Marathi. Do not reply in Hindi.'
+        : `Whisper identified the spoken audio as ${detectedReplyLanguage}. Use this as a strong clue and reply only in that language using its normal writing system. The transcript may be written in Latin letters or contain speech recognition errors. Do not translate it or switch to a related language.`
       : 'Infer the actual spoken language from the words and grammar, not from the script. The transcript may be romanized. For example, “tujhe nav kay” is Marathi, not Hindi; reply in Marathi using Devanagari. Reply in the speaker’s language using its normal writing system.';
 
     const completion = await groq.chat.completions.create({

@@ -149,7 +149,10 @@ async function playSarvamAudio(base64Audio, currentSession) {
 }
 
 async function speakReply(result, currentSession) {
-  if (result.audioBase64 && await playSarvamAudio(result.audioBase64, currentSession)) return true;
+  if (result.audioBase64) {
+    if (await playSarvamAudio(result.audioBase64, currentSession)) return true;
+    result.voiceError ||= 'The Indian language voice clip was created, but this browser could not play it. Check device volume and audio permissions.';
+  }
   if (!sessionActive || currentSession !== sessionId) return false;
   // A generic Hindi or English device voice is not a useful substitute for Marathi.
   if (result.language === 'mr-IN') return false;

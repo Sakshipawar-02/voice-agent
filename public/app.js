@@ -302,10 +302,11 @@ async function submitUtterance(currentSession) {
   try {
     const blob = await stopRecorderAndGetBlob();
     if (!sessionActive || currentSession !== sessionId) return;
+    // End microphone capture after each utterance. The user can restart it
+    // explicitly after reviewing and sending the transcript.
+    pauseMyVoice();
     if (!blob.size) {
-      setStatus('Listening…', 'active');
-      requestInProgress = false;
-      beginRecording();
+      setStatus('No speech captured. Start my voice to try again.', 'error');
       return;
     }
 

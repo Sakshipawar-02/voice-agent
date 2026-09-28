@@ -79,7 +79,7 @@ function inferReplyLanguage(text, reportedLanguage) {
   const marathiMarkers = [
     'kay', 'kaay', 'kai', 'nav', 'naav', 'mala', 'majha', 'majhi', 'maza', 'mazi',
     'tujhe', 'tujha', 'aahe', 'ahe', 'kasa', 'kashi', 'kuthe', 'kadhi', 'aapan', 'tumhi',
-    'mhanje', 'ithe', 'tithe', 'zhala', 'zala'
+    'mhanje', 'ithe', 'tithe', 'zhala', 'zala', 'marathi', 'madhe', 'bol', 'bola'
   ];
   const markerCount = marathiMarkers.filter((word) =>
     new RegExp(`\\b${word}\\b`).test(normalizedText)
@@ -189,6 +189,7 @@ app.post('/api/voice-chat', limitVoiceRequests, upload.single('audio'), async (r
             'The transcript contains distinctive Marathi words, even if Whisper labeled the audio Hindi.',
             'Reply only in natural Marathi written in Devanagari.',
             'For example, “Tujhe nav kay?” means “तुझे नाव काय?” and is Marathi.',
+            '“Marathi madhe bol” asks for a Marathi reply.',
             'Do not reply in Hindi.'
           ].join(' ')
         : [

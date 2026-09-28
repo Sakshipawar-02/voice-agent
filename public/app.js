@@ -154,6 +154,8 @@ async function playSarvamAudio(base64Audio, currentSession) {
 async function speakReply(result, currentSession) {
   if (result.audioBase64 && await playSarvamAudio(result.audioBase64, currentSession)) return true;
   if (!sessionActive || currentSession !== sessionId) return false;
+  // A generic Hindi or English device voice is not a useful substitute for Marathi.
+  if (result.language === 'mr-IN') return false;
   return speakWithDeviceVoice(result.reply, result.language);
 }
 

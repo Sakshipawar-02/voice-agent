@@ -187,7 +187,7 @@ app.post('/api/voice-chat', limitVoiceRequests, upload.single('audio'), async (r
             text: reply,
             model: 'bulbul:v3',
             language_code: language,
-            speaker: process.env.SARVAM_TTS_SPEAKER || 'ishita',
+            speaker: process.env.SARVAM_TTS_SPEAKER || (language === 'mr-IN' ? 'priya' : 'ishita'),
             pace: 0.95,
             output_audio_codec: 'wav'
           });

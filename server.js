@@ -128,6 +128,13 @@ app.post('/api/voice-chat', limitVoiceRequests, upload.single('audio'), async (r
       // Ignore malformed optional history and answer this utterance as a new conversation.
     }
 
+    const responseLanguage = ['mr', 'en'].includes(req.body.speechLanguage) ? req.body.speechLanguage : null;
+    const languageInstruction = responseLanguage === 'mr'
+      ? 'The user selected Marathi. Reply only in natural, conversational Marathi written in Devanagari script, and set language to mr-IN. The transcription may be written in Latin letters or contain speech recognition errors; interpret it as Marathi. Do not reply in Hindi.'
+      : responseLanguage === 'en'
+        ? 'The user selected Indian English. Reply only in natural Indian English and set language to en-IN.'
+        : null;
+
     const completion = await groq.chat.completions.create({
       model: process.env.GROQ_CHAT_MODEL || 'openai/gpt-oss-20b',
       messages: [
@@ -135,6 +142,7 @@ app.post('/api/voice-chat', limitVoiceRequests, upload.single('audio'), async (r
           role: 'system',
           content: 'You are a friendly, concise multilingual voice assistant. Reply in the same language and writing script as the user’s latest message. If the user mixes languages, naturally mirror that mix. Do not switch to English unless asked. Keep answers natural and suitable for speaking aloud.'
         },
+        ...(languageInstruction ? [{ role: 'system', content: languageInstruction }] : []),
         ...history,
         { role: 'user', content: userText }
       ],
@@ -159,7 +167,11 @@ app.post('/api/voice-chat', limitVoiceRequests, upload.single('audio'), async (r
     });
     const answer = JSON.parse(completion.choices[0]?.message?.content || '{}');
     const reply = answer.reply?.trim();
-    const language = normalizeLanguageTag(answer.language);
+    const language = responseLanguage === 'mr'
+      ? 'mr-IN'
+      : responseLanguage === 'en'
+        ? 'en-IN'
+        : normalizeLanguageTag(answer.language);
     if (!reply) throw new Error('Groq returned an empty response.');
 
     let audioBase64 = null;

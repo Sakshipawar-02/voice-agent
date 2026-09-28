@@ -1,6 +1,5 @@
 const toggleAgentBtn = document.getElementById('toggleAgentBtn');
 const toggleAssistantVoiceBtn = document.getElementById('toggleAssistantVoiceBtn');
-const speechLanguage = document.getElementById('speechLanguage');
 const statusBadge = document.getElementById('statusBadge');
 const transcriptBox = document.getElementById('transcriptBox');
 const correctionForm = document.getElementById('transcriptCorrection');
@@ -32,6 +31,7 @@ let replyAudio = null;
 let history = [];
 let voiceNotice = '';
 let pendingCorrection = false;
+let pendingSpeechLanguage = null;
 let agentVoiceEnabled = true;
 
 function setStatus(text, state = 'normal') {
@@ -88,12 +88,9 @@ function setDeviceVoice(utterance, languageTag) {
   }
   // Many devices do not include Indian English or Marathi voices. Use the
   // closest installed voice so a missing Sarvam key does not silence replies.
-  const fallbackBases = base === 'mr' ? ['hi', 'en'] : base === 'en' ? ['en'] : [base, 'en'];
-  const matchingVoice = fallbackBases
-    .flatMap((fallbackBase) => voices.filter((voice) => voice.lang.toLowerCase().split('-')[0] === fallbackBase))[0];
-  utterance.voice = matchingVoice || voices[0] || null;
-  // Some browsers populate their voice list after startup and can still use
-  // their default voice while getVoices() is empty.
+  const matchingVoice = voices.find((voice) => voice.lang.toLowerCase().split('-')[0] === base);
+  if (!matchingVoice) return false;
+  utterance.voice = matchingVoice;
   return true;
 }
 
@@ -161,14 +158,15 @@ async function speakReply(result, currentSession) {
 
 async function handleAssistantResult(result, currentSession) {
   if (!sessionActive || currentSession !== sessionId) return;
+  pendingSpeechLanguage = null;
   correctionForm.hidden = true;
   addTurn(result.transcript, result.reply);
   history.push({ role: 'user', content: result.transcript }, { role: 'assistant', content: result.reply });
   history = history.slice(-10);
   if (agentVoiceEnabled) {
     const voicePlayed = await speakReply(result, currentSession);
-    voiceNotice = voicePlayed ? '' : 'For Indian English/Marathi voice, add SARVAM_API_KEY or install en-IN/mr-IN voices.';
-    if (!voicePlayed) addOutputNotice(result.voiceError || 'I could not play a voice reply. Check that audio is enabled and configure SARVAM_API_KEY for Indian English and Marathi.');
+    voiceNotice = voicePlayed ? '' : 'Install a device voice for this language or configure Sarvam for a supported Indian language.';
+    if (!voicePlayed) addOutputNotice(result.voiceError || 'I could not play a voice reply. Check audio settings or install a matching voice for this language.');
   }
 }
 
@@ -187,7 +185,7 @@ async function sendCorrectedTranscript(event) {
     const response = await fetch('/api/voice-chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text, history: JSON.stringify(history), speechLanguage: speechLanguage.value })
+      body: JSON.stringify({ text, history: JSON.stringify(history), detectedLanguage: pendingSpeechLanguage })
     });
     const result = await response.json();
     if (!response.ok) throw new Error(result.error || `Request failed (${response.status}).`);
@@ -209,6 +207,7 @@ async function sendCorrectedTranscript(event) {
 
 function discardCorrectedTranscript() {
   pendingCorrection = false;
+  pendingSpeechLanguage = null;
   correctionForm.hidden = true;
   if (sessionActive && inputEnabled && !requestInProgress) beginRecording();
 }
@@ -290,13 +289,13 @@ async function submitUtterance(currentSession) {
     const form = new FormData();
     form.append('audio', blob, `voice.${extension}`);
     form.append('history', JSON.stringify(history));
-    form.append('speechLanguage', speechLanguage.value);
     form.append('transcribeOnly', 'true');
     const response = await fetch('/api/voice-chat', { method: 'POST', body: form });
     const result = await response.json();
     if (!response.ok) throw new Error(result.error || `Request failed (${response.status}).`);
     if (!sessionActive || currentSession !== sessionId) return;
     correctedTranscript.value = result.transcript || '';
+    pendingSpeechLanguage = result.detectedLanguage || null;
     correctionForm.hidden = false;
     pendingCorrection = true;
     setStatus('Review and correct the transcript');
@@ -344,6 +343,7 @@ async function startAgent() {
       sessionActive = true;
       history = [];
       pendingCorrection = false;
+      pendingSpeechLanguage = null;
       correctionForm.hidden = true;
       transcriptBox.replaceChildren();
     }
@@ -388,6 +388,7 @@ function stopAgent() {
   sessionActive = false;
   inputEnabled = false;
   pendingCorrection = false;
+  pendingSpeechLanguage = null;
   correctionForm.hidden = true;
   sessionId += 1;
   cancelAnimationFrame(vadFrame);

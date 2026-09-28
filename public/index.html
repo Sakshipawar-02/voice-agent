@@ -12,7 +12,6 @@
     .card { padding: 22px; border: 1px solid #334155; border-radius: 14px; background: #1e293b; box-shadow: 0 12px 32px #0003; }
     .toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 18px; }
     .dashboard-link { color: #7dd3fc; font-weight: 600; }
-    select { min-width: 145px; padding: 10px 12px; border: 1px solid #475569; border-radius: 8px; background: #0f172a; color: #f8fafc; font: inherit; }
     #statusBadge { color: #94a3b8; font-size: .92rem; }
     #statusBadge.active { color: #4ade80; }
     #statusBadge.error { color: #fca5a5; }
@@ -41,11 +40,6 @@
     <section class="card" aria-label="Voice conversation">
       <div class="toolbar">
         <a class="dashboard-link" href="/dashboard.html">Dashboard</a>
-        <select id="speechLanguage" aria-label="Speech language">
-          <option value="mr" selected>मराठी</option>
-          <option value="en">Indian English</option>
-          <option value="auto">Auto detect</option>
-        </select>
         <button id="toggleAgentBtn" type="button">Start my voice</button>
         <button id="toggleAssistantVoiceBtn" type="button" aria-pressed="true">Stop agent voice</button>
       </div>
@@ -60,6 +54,6 @@
       <div id="transcriptBox" aria-live="polite"></div>
     </section>
   </main>
-  <script src="app.js?v=hands-free-11"></script>
+  <script src="app.js?v=hands-free-12"></script>
 </body>
 </html>

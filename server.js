@@ -28,7 +28,7 @@ const languageNames = {
   arabic: 'ar', bengali: 'bn', chinese: 'zh', dutch: 'nl', english: 'en', farsi: 'fa',
   french: 'fr', german: 'de', gujarati: 'gu', hindi: 'hi', indonesian: 'id', italian: 'it',
   japanese: 'ja', kannada: 'kn', korean: 'ko', malayalam: 'ml', marathi: 'mr', nepali: 'ne',
-  persian: 'fa', polish: 'pl', portuguese: 'pt', punjabi: 'pa', russian: 'ru', spanish: 'es',
+  odia: 'od', persian: 'fa', polish: 'pl', portuguese: 'pt', punjabi: 'pa', russian: 'ru', spanish: 'es',
   swahili: 'sw', tamil: 'ta', telugu: 'te', thai: 'th', turkish: 'tr', ukrainian: 'uk',
   urdu: 'ur', vietnamese: 'vi'
 };
@@ -91,19 +91,20 @@ app.post('/api/voice-chat', limitVoiceRequests, upload.single('audio'), async (r
 
   try {
     let userText = correctedText;
+    let detectedLanguage = null;
     if (!userText) {
       const audioFile = await toFile(req.file.buffer, req.file.originalname || 'voice.webm', {
         type: req.file.mimetype || 'audio/webm'
       });
-      const selectedLanguage = ['mr', 'en'].includes(req.body.speechLanguage) ? req.body.speechLanguage : null;
       const transcription = await groq.audio.transcriptions.create({
         file: audioFile,
         model: process.env.GROQ_STT_MODEL || 'whisper-large-v3-turbo',
-        response_format: 'json',
-        ...(selectedLanguage ? { language: selectedLanguage } : {}),
-        ...(selectedLanguage === 'mr' ? { prompt: 'मराठी भाषेतील शब्द देवनागरी लिपीत लिहा.' } : {})
+        response_format: 'verbose_json'
       });
       userText = transcription.text?.trim();
+      detectedLanguage = typeof transcription.language === 'string'
+        ? transcription.language.slice(0, 40)
+        : null;
     }
     if (!userText) {
       return res.status(422).json({ error: 'I could not hear any speech. Try again closer to the microphone.' });
@@ -112,7 +113,7 @@ app.post('/api/voice-chat', limitVoiceRequests, upload.single('audio'), async (r
       return res.status(413).json({ error: 'Keep each message under 5,000 characters.' });
     }
     if (req.body.transcribeOnly === 'true') {
-      return res.json({ transcript: userText });
+      return res.json({ transcript: userText, detectedLanguage });
     }
 
     let history = [];
@@ -128,12 +129,13 @@ app.post('/api/voice-chat', limitVoiceRequests, upload.single('audio'), async (r
       // Ignore malformed optional history and answer this utterance as a new conversation.
     }
 
-    const responseLanguage = ['mr', 'en'].includes(req.body.speechLanguage) ? req.body.speechLanguage : null;
-    const languageInstruction = responseLanguage === 'mr'
-      ? 'The user selected Marathi. Reply only in natural, conversational Marathi written in Devanagari script, and set language to mr-IN. The transcription may be written in Latin letters or contain speech recognition errors; interpret it as Marathi. Do not reply in Hindi.'
-      : responseLanguage === 'en'
-        ? 'The user selected Indian English. Reply only in natural Indian English and set language to en-IN.'
-        : null;
+    const reportedSpeechLanguage = typeof req.body.detectedLanguage === 'string'
+      ? req.body.detectedLanguage.slice(0, 40)
+      : null;
+    const detectedReplyLanguage = reportedSpeechLanguage ? normalizeLanguageTag(reportedSpeechLanguage) : null;
+    const languageInstruction = detectedReplyLanguage
+      ? `Whisper identified the spoken audio as ${detectedReplyLanguage}. Use this as a strong clue and reply only in that language using its normal writing system. The transcript may be written in Latin letters or contain speech recognition errors. Do not translate it or switch to a related language.`
+      : 'Infer the actual spoken language from the words and grammar, not from the script. The transcript may be romanized. For example, “tujhe nav kay” is Marathi, not Hindi; reply in Marathi using Devanagari. Reply in the speaker’s language using its normal writing system.';
 
     const completion = await groq.chat.completions.create({
       model: process.env.GROQ_CHAT_MODEL || 'openai/gpt-oss-20b',
@@ -142,7 +144,7 @@ app.post('/api/voice-chat', limitVoiceRequests, upload.single('audio'), async (r
           role: 'system',
           content: 'You are a friendly, concise multilingual voice assistant. Reply in the same language and writing script as the user’s latest message. If the user mixes languages, naturally mirror that mix. Do not switch to English unless asked. Keep answers natural and suitable for speaking aloud.'
         },
-        ...(languageInstruction ? [{ role: 'system', content: languageInstruction }] : []),
+        { role: 'system', content: languageInstruction },
         ...history,
         { role: 'user', content: userText }
       ],
@@ -167,16 +169,18 @@ app.post('/api/voice-chat', limitVoiceRequests, upload.single('audio'), async (r
     });
     const answer = JSON.parse(completion.choices[0]?.message?.content || '{}');
     const reply = answer.reply?.trim();
-    const language = responseLanguage === 'mr'
-      ? 'mr-IN'
-      : responseLanguage === 'en'
-        ? 'en-IN'
-        : normalizeLanguageTag(answer.language);
+    const sarvamLanguageBases = new Set(['en', 'hi', 'bn', 'ta', 'te', 'gu', 'kn', 'ml', 'mr', 'pa', 'od']);
+    const detectedBaseLanguage = detectedReplyLanguage?.split('-')[0];
+    const language = detectedReplyLanguage
+      ? (sarvamLanguageBases.has(detectedBaseLanguage)
+        ? `${detectedBaseLanguage}-IN`
+        : detectedReplyLanguage)
+      : normalizeLanguageTag(answer.language);
     if (!reply) throw new Error('Groq returned an empty response.');
 
     let audioBase64 = null;
     let voiceError = null;
-    if (['en-IN', 'mr-IN'].includes(language)) {
+    if (sarvamLanguageBases.has(language.split('-')[0]) && language.endsWith('-IN')) {
       if (!sarvam) {
         voiceError = 'Indian voice is not configured. Add SARVAM_API_KEY in Render → Environment, then redeploy.';
       } else if (reply.length > 2500) {

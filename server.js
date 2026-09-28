@@ -84,8 +84,10 @@ function inferReplyLanguage(text, reportedLanguage) {
   const markerCount = marathiMarkers.filter((word) =>
     new RegExp(`\\b${word}\\b`).test(normalizedText)
   ).length;
+  const marathiScriptMarkers = ['मराठी', 'महाराठी', 'महाराधि', 'मध्ये', 'मधे', 'बोल'];
+  const devanagariMarkerCount = marathiScriptMarkers.filter((word) => normalizedText.includes(word)).length;
 
-  if (markerCount >= 2) return 'mr-IN';
+  if (markerCount >= 2 || devanagariMarkerCount >= 2) return 'mr-IN';
   return reportedLanguage ? normalizeLanguageTag(reportedLanguage) : null;
 }
 

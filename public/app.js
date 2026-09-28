@@ -462,8 +462,8 @@ toggleAssistantVoiceBtn.addEventListener('click', () => {
       replyAudio = null;
     }
     assistantSpeaking = false;
+    if (sessionActive && inputEnabled && !requestInProgress) beginRecording();
   }
 });
 correctionForm.addEventListener('submit', sendCorrectedTranscript);
 discardCorrectionBtn.addEventListener('click', discardCorrectedTranscript);
-

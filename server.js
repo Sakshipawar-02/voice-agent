@@ -210,8 +210,21 @@ app.post('/api/voice-chat', limitVoiceRequests, upload.single('audio'), async (r
           audioBase64 = speech.audios?.[0] || null;
           if (!audioBase64) voiceError = 'The Indian voice service returned no audio. Check the Render logs.';
         } catch (error) {
-          console.error('[Sarvam] Indian voice synthesis failed:', error);
-          voiceError = 'Indian voice generation failed. Check the SARVAM_API_KEY and Render logs.';
+          const statusCode = error.statusCode || error.status;
+          console.error('[Sarvam] Indian voice synthesis failed:', {
+            statusCode,
+            message: error.message,
+            body: error.body
+          });
+          if (statusCode === 401 || statusCode === 403) {
+            voiceError = 'Sarvam rejected the API key or this key does not have text-to-speech access. Check the key and account access in Sarvam.';
+          } else if (statusCode === 429) {
+            voiceError = 'Sarvam voice quota or rate limit reached. Check your Sarvam account usage.';
+          } else if (statusCode === 400 || statusCode === 422) {
+            voiceError = 'Sarvam rejected the voice request. Check the speaker and language settings in the Render logs.';
+          } else {
+            voiceError = `Sarvam voice generation failed${statusCode ? ` (HTTP ${statusCode})` : ''}. Check the Render logs for details.`;
+          }
         }
       }
     }

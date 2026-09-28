@@ -100,15 +100,25 @@ function resumeListeningAfterReply() {
   if (sessionActive && inputEnabled && !requestInProgress) beginRecording();
 }
 
-function speakWithDeviceVoice(text, languageTag) {
+async function speakWithDeviceVoice(text, languageTag) {
   if (!('speechSynthesis' in window)) return false;
+  const speech = window.speechSynthesis;
+  if (!speech.getVoices().length) {
+    await new Promise((resolve) => {
+      const timer = setTimeout(resolve, 1200);
+      speech.addEventListener('voiceschanged', () => {
+        clearTimeout(timer);
+        resolve();
+      }, { once: true });
+    });
+  }
   const utterance = new SpeechSynthesisUtterance(text);
   if (!setDeviceVoice(utterance, languageTag)) return false;
   assistantSpeaking = true;
   setStatus('Speaking…', 'active');
   utterance.onend = utterance.onerror = resumeListeningAfterReply;
-  window.speechSynthesis.cancel();
-  window.speechSynthesis.speak(utterance);
+  speech.cancel();
+  speech.speak(utterance);
   return true;
 }
 
@@ -177,6 +187,9 @@ async function handleAssistantResult(result, currentSession) {
       : 'Install a device voice for this language or configure Sarvam for a supported Indian language.';
     if (!voicePlayed) {
       const message = result.voiceError
+        || (result.language?.toLowerCase().startsWith('de')
+          ? 'No German voice is installed on this device. Add a German text-to-speech voice in Windows Settings, then reload the page.'
+          : null)
         || 'I could not play a voice reply. Check audio settings or install a matching voice for this language.';
       addOutputNotice(message);
     }

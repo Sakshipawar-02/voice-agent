@@ -307,11 +307,20 @@ app.post('/api/voice-chat', limitVoiceRequests, upload.single('audio'), async (r
     }
     res.json({ transcript: userText, reply, language, audioBase64, voiceError });
   } catch (error) {
-    console.error('[Groq] Voice request failed:', error);
-    const status = error.status === 401 ? 503 : 502;
-    const message = error.status === 401
-      ? 'Groq rejected the API key. Check GROQ_API_KEY in your server environment.'
-      : 'Groq could not process that message. Check the server logs and try again.';
+    const apiStatus = error.status || error.statusCode;
+    console.error('[Groq] Voice request failed:', {
+      status: apiStatus,
+      code: error.code,
+      message: error.message
+    });
+    const status = [401, 403, 429].includes(apiStatus) ? 503 : 502;
+    const message = apiStatus === 401 || apiStatus === 403
+      ? 'Groq rejected the API key. Check GROQ_API_KEY in Render Environment.'
+      : apiStatus === 429
+        ? 'Groq rate limit or usage quota reached. Check your Groq account usage.'
+        : apiStatus === 400 || apiStatus === 404
+          ? `Groq rejected the request (HTTP ${apiStatus}). Check the model and request settings in Render logs.`
+          : `Groq could not process that message${apiStatus ? ` (HTTP ${apiStatus})` : ''}. Check Render logs and try again.`;
     res.status(status).json({ error: message });
   }
 });

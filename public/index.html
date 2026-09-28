@@ -10,7 +10,7 @@
     main { width: min(100%, 760px); }
     h1 { margin: 0 0 6px; color: #38bdf8; font-size: 1.7rem; }
     .card { padding: 22px; border: 1px solid #334155; border-radius: 14px; background: #1e293b; box-shadow: 0 12px 32px #0003; }
-    .toolbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 18px; }
+    .toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 18px; }
     .dashboard-link { color: #7dd3fc; font-weight: 600; }
     select { min-width: 145px; padding: 10px 12px; border: 1px solid #475569; border-radius: 8px; background: #0f172a; color: #f8fafc; font: inherit; }
     #statusBadge { color: #94a3b8; font-size: .92rem; }
@@ -18,6 +18,7 @@
     #statusBadge.error { color: #fca5a5; }
     button { min-width: 180px; padding: 12px 18px; border: 0; border-radius: 9px; background: #2563eb; color: white; font: inherit; font-weight: 700; cursor: pointer; }
     button.active { background: #dc2626; }
+    button.voice-off { background: #475569; }
     button:disabled { opacity: .65; cursor: wait; }
     #transcriptBox { display: grid; gap: 14px; max-height: 60vh; overflow-y: auto; }
     .turn { padding: 14px; border: 1px solid #334155; border-radius: 10px; background: #0f172a; }
@@ -45,7 +46,8 @@
           <option value="en">Indian English</option>
           <option value="auto">Auto detect</option>
         </select>
-        <button id="toggleAgentBtn" type="button">Start voice agent</button>
+        <button id="toggleAgentBtn" type="button">Start my voice</button>
+        <button id="toggleAssistantVoiceBtn" type="button" aria-pressed="true">Stop agent voice</button>
       </div>
       <form id="transcriptCorrection" class="correction" hidden>
         <label for="correctedTranscript">Check what I heard. Edit any mistakes, then send:</label>
@@ -58,6 +60,6 @@
       <div id="transcriptBox" aria-live="polite"></div>
     </section>
   </main>
-  <script src="app.js?v=hands-free-8"></script>
+  <script src="app.js?v=hands-free-9"></script>
 </body>
 </html>

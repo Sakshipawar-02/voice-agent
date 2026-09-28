@@ -1,4 +1,5 @@
 const toggleAgentBtn = document.getElementById('toggleAgentBtn');
+const toggleAssistantVoiceBtn = document.getElementById('toggleAssistantVoiceBtn');
 const speechLanguage = document.getElementById('speechLanguage');
 const statusBadge = document.getElementById('statusBadge');
 const transcriptBox = document.getElementById('transcriptBox');
@@ -12,6 +13,7 @@ const minimumSpeechMs = 450;
 const speechRmsThreshold = 0.015;
 
 let sessionActive = false;
+let inputEnabled = false;
 let starting = false;
 let sessionId = 0;
 let mediaStream = null;
@@ -30,6 +32,7 @@ let replyAudio = null;
 let history = [];
 let voiceNotice = '';
 let pendingCorrection = false;
+let agentVoiceEnabled = true;
 
 function setStatus(text, state = 'normal') {
   if (!statusBadge) return;
@@ -97,7 +100,7 @@ function setDeviceVoice(utterance, languageTag) {
 function resumeListeningAfterReply() {
   assistantSpeaking = false;
   replyAudio = null;
-  if (sessionActive && !requestInProgress) beginRecording();
+  if (sessionActive && inputEnabled && !requestInProgress) beginRecording();
 }
 
 function speakWithDeviceVoice(text, languageTag) {
@@ -160,9 +163,11 @@ async function handleAssistantResult(result, currentSession) {
   addTurn(result.transcript, result.reply);
   history.push({ role: 'user', content: result.transcript }, { role: 'assistant', content: result.reply });
   history = history.slice(-10);
-  const voicePlayed = await speakReply(result, currentSession);
-  voiceNotice = voicePlayed ? '' : 'For Indian English/Marathi voice, add SARVAM_API_KEY or install en-IN/mr-IN voices.';
-  if (!voicePlayed) addOutputNotice(result.voiceError || 'I could not play a voice reply. Check that audio is enabled and configure SARVAM_API_KEY for Indian English and Marathi.');
+  if (agentVoiceEnabled) {
+    const voicePlayed = await speakReply(result, currentSession);
+    voiceNotice = voicePlayed ? '' : 'For Indian English/Marathi voice, add SARVAM_API_KEY or install en-IN/mr-IN voices.';
+    if (!voicePlayed) addOutputNotice(result.voiceError || 'I could not play a voice reply. Check that audio is enabled and configure SARVAM_API_KEY for Indian English and Marathi.');
+  }
 }
 
 async function sendCorrectedTranscript(event) {
@@ -195,7 +200,7 @@ async function sendCorrectedTranscript(event) {
     requestInProgress = false;
     sendCorrectionBtn.disabled = false;
     discardCorrectionBtn.disabled = false;
-    if (sessionActive && currentSession === sessionId && !assistantSpeaking && !pendingCorrection) beginRecording();
+    if (sessionActive && inputEnabled && currentSession === sessionId && !assistantSpeaking && !pendingCorrection) beginRecording();
     if (!sessionActive) toggleAgentBtn.disabled = false;
   }
 }
@@ -203,11 +208,11 @@ async function sendCorrectedTranscript(event) {
 function discardCorrectedTranscript() {
   pendingCorrection = false;
   correctionForm.hidden = true;
-  if (sessionActive && !requestInProgress) beginRecording();
+  if (sessionActive && inputEnabled && !requestInProgress) beginRecording();
 }
 
 function beginRecording() {
-  if (!sessionActive || requestInProgress || assistantSpeaking || !mediaStream) return;
+  if (!sessionActive || !inputEnabled || requestInProgress || assistantSpeaking || pendingCorrection || !mediaStream) return;
   const mimeType = supportedAudioType();
   if (!mimeType) {
     addOutputNotice('This browser cannot record audio. Try the latest Chrome or Edge.');
@@ -227,7 +232,7 @@ function beginRecording() {
 }
 
 function monitorMicrophone() {
-  if (!sessionActive || !analyser) return;
+  if (!sessionActive || !inputEnabled || !analyser) return;
   const samples = analyserSamples;
   analyser.getFloatTimeDomainData(samples);
   let energy = 0;
@@ -298,7 +303,7 @@ async function submitUtterance(currentSession) {
     if (sessionActive && currentSession === sessionId) addOutputNotice(error.message || 'I could not process that recording. Please try again.');
   } finally {
     requestInProgress = false;
-    if (sessionActive && currentSession === sessionId && !assistantSpeaking && !pendingCorrection) beginRecording();
+    if (sessionActive && inputEnabled && currentSession === sessionId && !assistantSpeaking && !pendingCorrection) beginRecording();
     if (!sessionActive) toggleAgentBtn.disabled = false;
   }
 }
@@ -313,15 +318,18 @@ async function startAgent() {
       throw new Error('Microphone access requires HTTPS and a supported browser.');
     }
     if (!supportedAudioType()) throw new Error('Audio recording is not supported by this browser.');
-    const healthResponse = await fetch('/api/health');
-    const health = await healthResponse.json();
-    if (!health.aiConfigured) throw new Error('The server is missing GROQ_API_KEY.');
+    const newSession = !sessionActive;
+    if (newSession) {
+      const healthResponse = await fetch('/api/health');
+      const health = await healthResponse.json();
+      if (!health.aiConfigured) throw new Error('The server is missing GROQ_API_KEY.');
+    }
 
     mediaStream = await navigator.mediaDevices.getUserMedia({
       audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
       video: false
     });
-    audioContext = new (window.AudioContext || window.webkitAudioContext)();
+    audioContext ||= new (window.AudioContext || window.webkitAudioContext)();
     await audioContext.resume();
     analyser = audioContext.createAnalyser();
     analyser.fftSize = 2048;
@@ -329,13 +337,16 @@ async function startAgent() {
     sourceNode = audioContext.createMediaStreamSource(mediaStream);
     sourceNode.connect(analyser);
 
-    sessionId += 1;
-    sessionActive = true;
-    history = [];
-    pendingCorrection = false;
-    correctionForm.hidden = true;
-    transcriptBox.replaceChildren();
-    toggleAgentBtn.textContent = 'Stop voice agent';
+    if (newSession) {
+      sessionId += 1;
+      sessionActive = true;
+      history = [];
+      pendingCorrection = false;
+      correctionForm.hidden = true;
+      transcriptBox.replaceChildren();
+    }
+    inputEnabled = true;
+    toggleAgentBtn.textContent = 'Stop my voice';
     toggleAgentBtn.classList.add('active');
     toggleAgentBtn.disabled = false;
     beginRecording();
@@ -343,6 +354,7 @@ async function startAgent() {
   } catch (error) {
     if (mediaStream) mediaStream.getTracks().forEach((track) => track.stop());
     mediaStream = null;
+    inputEnabled = false;
     const message = error.name === 'NotAllowedError'
       ? 'Microphone permission was denied. Allow microphone access in your browser, then start again.'
       : error.message || 'Could not start the voice agent.';
@@ -353,8 +365,26 @@ async function startAgent() {
   }
 }
 
+function pauseMyVoice() {
+  inputEnabled = false;
+  cancelAnimationFrame(vadFrame);
+  if (recorder?.state === 'recording') recorder.stop();
+  recorder = null;
+  audioChunks = [];
+  if (mediaStream) mediaStream.getTracks().forEach((track) => track.stop());
+  mediaStream = null;
+  sourceNode?.disconnect();
+  sourceNode = null;
+  analyser = null;
+  analyserSamples = null;
+  toggleAgentBtn.textContent = 'Start my voice';
+  toggleAgentBtn.classList.remove('active');
+  setStatus('My voice stopped');
+}
+
 function stopAgent() {
   sessionActive = false;
+  inputEnabled = false;
   pendingCorrection = false;
   correctionForm.hidden = true;
   sessionId += 1;
@@ -376,15 +406,30 @@ function stopAgent() {
   replyAudio = null;
   assistantSpeaking = false;
   if ('speechSynthesis' in window) window.speechSynthesis.cancel();
-  toggleAgentBtn.textContent = 'Start voice agent';
+  toggleAgentBtn.textContent = 'Start my voice';
   toggleAgentBtn.classList.remove('active');
   toggleAgentBtn.disabled = requestInProgress;
   setStatus('Stopped');
 }
 
 toggleAgentBtn.addEventListener('click', () => {
-  if (sessionActive) stopAgent();
+  if (inputEnabled) pauseMyVoice();
   else void startAgent();
+});
+toggleAssistantVoiceBtn.addEventListener('click', () => {
+  agentVoiceEnabled = !agentVoiceEnabled;
+  toggleAssistantVoiceBtn.textContent = agentVoiceEnabled ? 'Stop agent voice' : 'Start agent voice';
+  toggleAssistantVoiceBtn.setAttribute('aria-pressed', String(agentVoiceEnabled));
+  toggleAssistantVoiceBtn.classList.toggle('voice-off', !agentVoiceEnabled);
+
+  if (!agentVoiceEnabled) {
+    if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+    if (replyAudio) {
+      try { replyAudio.stop(); } catch { /* It may have ended already. */ }
+      replyAudio = null;
+    }
+    assistantSpeaking = false;
+  }
 });
 correctionForm.addEventListener('submit', sendCorrectedTranscript);
 discardCorrectionBtn.addEventListener('click', discardCorrectedTranscript);

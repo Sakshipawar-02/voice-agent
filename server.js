@@ -72,34 +72,47 @@ function limitVoiceRequests(req, res, next) {
     requestWindows.set(key, { startedAt: now, count: 1 });
     return next();
   }
-  if (window.count >= 10) {
+  if (window.count >= 20) {
     return res.status(429).json({ error: 'Too many voice messages. Wait a minute and try again.' });
   }
   window.count += 1;
   next();
 }
 
-// One recorded utterance is transcribed by Groq Whisper, then answered by a chat model.
+// Transcribe first so the client can correct the recognized text before requesting an answer.
 app.post('/api/voice-chat', limitVoiceRequests, upload.single('audio'), async (req, res) => {
   if (!groq) {
     return res.status(503).json({ error: 'The server is missing its GROQ_API_KEY environment variable.' });
   }
-  if (!req.file) {
+  const correctedText = typeof req.body?.text === 'string' ? req.body.text.trim() : '';
+  if (!req.file && !correctedText) {
     return res.status(400).json({ error: 'Record a message before sending it.' });
   }
 
   try {
-    const audioFile = await toFile(req.file.buffer, req.file.originalname || 'voice.webm', {
-      type: req.file.mimetype || 'audio/webm'
-    });
-    const transcription = await groq.audio.transcriptions.create({
-      file: audioFile,
-      model: process.env.GROQ_STT_MODEL || 'whisper-large-v3-turbo',
-      response_format: 'json'
-    });
-    const userText = transcription.text?.trim();
+    let userText = correctedText;
+    if (!userText) {
+      const audioFile = await toFile(req.file.buffer, req.file.originalname || 'voice.webm', {
+        type: req.file.mimetype || 'audio/webm'
+      });
+      const selectedLanguage = ['mr', 'en'].includes(req.body.speechLanguage) ? req.body.speechLanguage : null;
+      const transcription = await groq.audio.transcriptions.create({
+        file: audioFile,
+        model: process.env.GROQ_STT_MODEL || 'whisper-large-v3-turbo',
+        response_format: 'json',
+        ...(selectedLanguage ? { language: selectedLanguage } : {}),
+        ...(selectedLanguage === 'mr' ? { prompt: 'मराठी भाषेतील शब्द देवनागरी लिपीत लिहा.' } : {})
+      });
+      userText = transcription.text?.trim();
+    }
     if (!userText) {
       return res.status(422).json({ error: 'I could not hear any speech. Try again closer to the microphone.' });
+    }
+    if (userText.length > 5000) {
+      return res.status(413).json({ error: 'Keep each message under 5,000 characters.' });
+    }
+    if (req.body.transcribeOnly === 'true') {
+      return res.json({ transcript: userText });
     }
 
     let history = [];
@@ -150,18 +163,28 @@ app.post('/api/voice-chat', limitVoiceRequests, upload.single('audio'), async (r
     if (!reply) throw new Error('Groq returned an empty response.');
 
     let audioBase64 = null;
-    if (sarvam && ['en-IN', 'mr-IN'].includes(language) && reply.length <= 2500) {
-      try {
-        const speech = await sarvam.textToSpeech.convert({
-          text: reply,
-          model: 'bulbul:v3',
-          language_code: language,
-          speaker: process.env.SARVAM_TTS_SPEAKER || 'ishita',
-          pace: 0.95
-        });
-        audioBase64 = speech.audios?.[0] || null;
-      } catch (error) {
-        console.error('[Sarvam] Indian voice synthesis failed; browser voice will be used:', error);
+    let voiceError = null;
+    if (['en-IN', 'mr-IN'].includes(language)) {
+      if (!sarvam) {
+        voiceError = 'Indian voice is not configured. Add SARVAM_API_KEY in Render → Environment, then redeploy.';
+      } else if (reply.length > 2500) {
+        voiceError = 'This reply is too long for one voice clip. Ask me to give a shorter answer.';
+      } else {
+        try {
+          const speech = await sarvam.textToSpeech.convert({
+            text: reply,
+            model: 'bulbul:v3',
+            language_code: language,
+            speaker: process.env.SARVAM_TTS_SPEAKER || 'ishita',
+            pace: 0.95,
+            output_audio_codec: 'wav'
+          });
+          audioBase64 = speech.audios?.[0] || null;
+          if (!audioBase64) voiceError = 'The Indian voice service returned no audio. Check the Render logs.';
+        } catch (error) {
+          console.error('[Sarvam] Indian voice synthesis failed:', error);
+          voiceError = 'Indian voice generation failed. Check the SARVAM_API_KEY and Render logs.';
+        }
       }
     }
 
@@ -171,7 +194,7 @@ app.post('/api/voice-chat', limitVoiceRequests, upload.single('audio'), async (r
       // Conversation still succeeds if persistence is temporarily unavailable.
       console.error('[DB] Could not save conversation:', error);
     }
-    res.json({ transcript: userText, reply, language, audioBase64 });
+    res.json({ transcript: userText, reply, language, audioBase64, voiceError });
   } catch (error) {
     console.error('[Groq] Voice request failed:', error);
     const status = error.status === 401 ? 503 : 502;

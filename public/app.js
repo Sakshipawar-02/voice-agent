@@ -1,6 +1,11 @@
 const toggleAgentBtn = document.getElementById('toggleAgentBtn');
+const speechLanguage = document.getElementById('speechLanguage');
 const statusBadge = document.getElementById('statusBadge');
 const transcriptBox = document.getElementById('transcriptBox');
+const correctionForm = document.getElementById('transcriptCorrection');
+const correctedTranscript = document.getElementById('correctedTranscript');
+const sendCorrectionBtn = document.getElementById('sendCorrection');
+const discardCorrectionBtn = document.getElementById('discardCorrection');
 
 const silenceAfterSpeechMs = 1200;
 const minimumSpeechMs = 450;
@@ -24,6 +29,7 @@ let assistantSpeaking = false;
 let replyAudio = null;
 let history = [];
 let voiceNotice = '';
+let pendingCorrection = false;
 
 function setStatus(text, state = 'normal') {
   if (!statusBadge) return;
@@ -77,8 +83,14 @@ function setDeviceVoice(utterance, languageTag) {
     utterance.voice = exactVoice;
     return true;
   }
-  if (['en-in', 'mr-in'].includes(requested)) return false;
-  utterance.voice = voices.find((voice) => voice.lang.toLowerCase().split('-')[0] === base) || null;
+  // Many devices do not include Indian English or Marathi voices. Use the
+  // closest installed voice so a missing Sarvam key does not silence replies.
+  const fallbackBases = base === 'mr' ? ['hi', 'en'] : base === 'en' ? ['en'] : [base, 'en'];
+  const matchingVoice = fallbackBases
+    .flatMap((fallbackBase) => voices.filter((voice) => voice.lang.toLowerCase().split('-')[0] === fallbackBase))[0];
+  utterance.voice = matchingVoice || voices[0] || null;
+  // Some browsers populate their voice list after startup and can still use
+  // their default voice while getVoices() is empty.
   return true;
 }
 
@@ -100,23 +112,98 @@ function speakWithDeviceVoice(text, languageTag) {
   return true;
 }
 
-function speakReply(result, currentSession) {
-  if (result.audioBase64 && typeof Audio !== 'undefined') {
-    const player = new Audio(`data:audio/wav;base64,${result.audioBase64}`);
-    replyAudio = player;
+async function playSarvamAudio(base64Audio, currentSession) {
+  if (!audioContext || audioContext.state !== 'running') return false;
+  try {
+    const binary = atob(base64Audio);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+    const audioBuffer = await audioContext.decodeAudioData(bytes.buffer);
+    if (!sessionActive || currentSession !== sessionId) return false;
+
+    const source = audioContext.createBufferSource();
+    source.buffer = audioBuffer;
+    source.connect(audioContext.destination);
+    replyAudio = source;
     assistantSpeaking = true;
     setStatus('Speaking…', 'active');
-    player.onended = resumeListeningAfterReply;
-    player.onerror = () => {
-      if (!sessionActive || currentSession !== sessionId) return;
-      replyAudio = null;
-      assistantSpeaking = false;
-      if (!speakWithDeviceVoice(result.reply, result.language)) resumeListeningAfterReply();
-    };
-    player.play().catch(() => player.onerror?.());
-    return true;
+    return await new Promise((resolve) => {
+      source.addEventListener('ended', () => {
+        if (replyAudio === source) resumeListeningAfterReply();
+        resolve(true);
+      }, { once: true });
+      try {
+        source.start();
+      } catch {
+        replyAudio = null;
+        assistantSpeaking = false;
+        resolve(false);
+      }
+    });
+  } catch (error) {
+    console.warn('[Voice] Could not decode or play the Indian voice audio:', error);
+    replyAudio = null;
+    assistantSpeaking = false;
+    return false;
   }
+}
+
+async function speakReply(result, currentSession) {
+  if (result.audioBase64 && await playSarvamAudio(result.audioBase64, currentSession)) return true;
+  if (!sessionActive || currentSession !== sessionId) return false;
   return speakWithDeviceVoice(result.reply, result.language);
+}
+
+async function handleAssistantResult(result, currentSession) {
+  if (!sessionActive || currentSession !== sessionId) return;
+  correctionForm.hidden = true;
+  addTurn(result.transcript, result.reply);
+  history.push({ role: 'user', content: result.transcript }, { role: 'assistant', content: result.reply });
+  history = history.slice(-10);
+  const voicePlayed = await speakReply(result, currentSession);
+  voiceNotice = voicePlayed ? '' : 'For Indian English/Marathi voice, add SARVAM_API_KEY or install en-IN/mr-IN voices.';
+  if (!voicePlayed) addOutputNotice(result.voiceError || 'I could not play a voice reply. Check that audio is enabled and configure SARVAM_API_KEY for Indian English and Marathi.');
+}
+
+async function sendCorrectedTranscript(event) {
+  event.preventDefault();
+  const text = correctedTranscript.value.trim();
+  if (!text || requestInProgress || !pendingCorrection) return;
+
+  const currentSession = sessionId;
+  pendingCorrection = false;
+  requestInProgress = true;
+  sendCorrectionBtn.disabled = true;
+  discardCorrectionBtn.disabled = true;
+  setStatus('Thinking…');
+  try {
+    const response = await fetch('/api/voice-chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text, history: JSON.stringify(history) })
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || `Request failed (${response.status}).`);
+    result.transcript = text;
+    await handleAssistantResult(result, currentSession);
+  } catch (error) {
+    if (sessionActive && currentSession === sessionId) {
+      pendingCorrection = true;
+      addOutputNotice(error.message || 'I could not process that message. Please try again.');
+    }
+  } finally {
+    requestInProgress = false;
+    sendCorrectionBtn.disabled = false;
+    discardCorrectionBtn.disabled = false;
+    if (sessionActive && currentSession === sessionId && !assistantSpeaking && !pendingCorrection) beginRecording();
+    if (!sessionActive) toggleAgentBtn.disabled = false;
+  }
+}
+
+function discardCorrectedTranscript() {
+  pendingCorrection = false;
+  correctionForm.hidden = true;
+  if (sessionActive && !requestInProgress) beginRecording();
 }
 
 function beginRecording() {
@@ -196,22 +283,22 @@ async function submitUtterance(currentSession) {
     const form = new FormData();
     form.append('audio', blob, `voice.${extension}`);
     form.append('history', JSON.stringify(history));
+    form.append('speechLanguage', speechLanguage.value);
+    form.append('transcribeOnly', 'true');
     const response = await fetch('/api/voice-chat', { method: 'POST', body: form });
     const result = await response.json();
     if (!response.ok) throw new Error(result.error || `Request failed (${response.status}).`);
     if (!sessionActive || currentSession !== sessionId) return;
-
-    addTurn(result.transcript, result.reply);
-    history.push({ role: 'user', content: result.transcript }, { role: 'assistant', content: result.reply });
-    history = history.slice(-10);
-    const voicePlayed = speakReply(result, currentSession);
-    voiceNotice = voicePlayed ? '' : 'For Indian English/Marathi voice, add SARVAM_API_KEY or install en-IN/mr-IN voices.';
-    if (!voicePlayed) addOutputNotice('I could not play a voice reply. Check that audio is enabled and add SARVAM_API_KEY on the server for Indian English and Marathi.');
+    correctedTranscript.value = result.transcript || '';
+    correctionForm.hidden = false;
+    pendingCorrection = true;
+    setStatus('Review and correct the transcript');
+    correctedTranscript.focus();
   } catch (error) {
     if (sessionActive && currentSession === sessionId) addOutputNotice(error.message || 'I could not process that recording. Please try again.');
   } finally {
     requestInProgress = false;
-    if (sessionActive && currentSession === sessionId && !assistantSpeaking) beginRecording();
+    if (sessionActive && currentSession === sessionId && !assistantSpeaking && !pendingCorrection) beginRecording();
     if (!sessionActive) toggleAgentBtn.disabled = false;
   }
 }
@@ -245,6 +332,8 @@ async function startAgent() {
     sessionId += 1;
     sessionActive = true;
     history = [];
+    pendingCorrection = false;
+    correctionForm.hidden = true;
     transcriptBox.replaceChildren();
     toggleAgentBtn.textContent = 'Stop voice agent';
     toggleAgentBtn.classList.add('active');
@@ -266,6 +355,8 @@ async function startAgent() {
 
 function stopAgent() {
   sessionActive = false;
+  pendingCorrection = false;
+  correctionForm.hidden = true;
   sessionId += 1;
   cancelAnimationFrame(vadFrame);
   if (recorder?.state === 'recording') recorder.stop();
@@ -279,7 +370,9 @@ function stopAgent() {
   analyserSamples = null;
   if (audioContext) void audioContext.close();
   audioContext = null;
-  if (replyAudio) replyAudio.pause();
+  if (replyAudio) {
+    try { replyAudio.stop(); } catch { /* It may have ended already. */ }
+  }
   replyAudio = null;
   assistantSpeaking = false;
   if ('speechSynthesis' in window) window.speechSynthesis.cancel();
@@ -293,3 +386,5 @@ toggleAgentBtn.addEventListener('click', () => {
   if (sessionActive) stopAgent();
   else void startAgent();
 });
+correctionForm.addEventListener('submit', sendCorrectedTranscript);
+discardCorrectionBtn.addEventListener('click', discardCorrectedTranscript);

@@ -213,7 +213,8 @@ app.post('/api/voice-chat', limitVoiceRequests, upload.single('audio'), async (r
         {
           role: 'system',
           content: [
-            'You are a friendly, concise multilingual voice assistant.',
+            'You are a friendly, concise multilingual voice assistant called Voice Assistant.',
+            'If asked your name or identity, say you are the user’s voice assistant; never call yourself ChatGPT or OpenAI.',
             'Infer language from the spoken words, not just the script.',
             'Reply in that language and normal writing system.',
             'Keep replies short and natural for speech.'
